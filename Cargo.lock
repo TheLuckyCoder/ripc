@@ -326,17 +326,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "python_lib_ipc"
-version = "0.2.0"
-dependencies = [
- "libc",
- "pyo3",
- "rustix",
- "v4l",
- "zune-jpeg",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -382,6 +371,17 @@ name = "regex-syntax"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adad44e29e4c806119491a7f06f03de4d1af22c3a680dd47f1e6e179439d1f56"
+
+[[package]]
+name = "ripc"
+version = "0.2.0"
+dependencies = [
+ "libc",
+ "pyo3",
+ "rustix",
+ "v4l",
+ "zune-jpeg",
+]
 
 [[package]]
 name = "rustc-hash"
@@ -457,14 +457,14 @@ checksum = "d8fbfea44a46799d62c55323f3c55d06df722fbe577851d848d328a1041c3403"
 dependencies = [
  "bitflags 1.3.2",
  "libc",
- "v4l2-sys-mit",
+ "v4l-sys",
 ]
 
 [[package]]
-name = "v4l2-sys-mit"
+name = "v4l-sys"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6779878362b9bacadc7893eac76abe69612e8837ef746573c4a5239daf11990b"
+checksum = "16214e9b9476f0e76d117945c9c18a46a2602643c917a75b718ae2cf5395fa30"
 dependencies = [
  "bindgen",
 ]
