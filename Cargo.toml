@@ -1,0 +1,18 @@
+[package]
+name = "python_lib_ipc"
+version = "0.2.0"
+edition = "2021"
+
+[profile.release]
+lto = "fat"
+
+[lib]
+name = "ripc"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21" }
+libc = "0.2"
+rustix = { version = "0.38", default-features = false, features = ["mm", "fs", "shm", "std", "linux_latest"] }
+v4l = { version = "0.14.0", default-features = false, features = ["v4l2-sys"] }
+zune-jpeg = "0.4.11"
