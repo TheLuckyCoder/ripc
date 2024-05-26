@@ -1,25 +1,56 @@
 class SharedMemoryWriter(object):
-    # Topic is recommended to start with a '/'
-    def __init__(self, topic: str, size_mb: int): ...
+    def __init__(self, name: str, size: int):
+        """
+        :parameter name is recommended to start with a '/'
+        :parameter size cannot be 0
+        """
+        pass
 
-    # Reads the shared memory into a buffer then allocates a bytes object
-    def write(self, bytes_to_write: bytes) -> None: ...
+    def write(self, bytes_to_write: bytes) -> None:
+        """
+        Reads the shared memory into a buffer then allocates a bytes object
+        """
+        pass
 
-    # Amount of bytes allocated in this shared memory
-    def size(self) -> int: ...
+    def name(self) -> str:
+        """
+        :returns: the name of this shared memory file
+        """
+        pass
+
+    def size(self) -> int:
+        """
+        :returns: Amount of bytes allocated in this shared memory
+        """
+        pass
 
 class SharedMemoryReader:
     def __init__(self, topic: str): ...
 
-    # Reads the shared memory into a buffer then allocates a bytes object
-    def read(self) -> bytes: ...
+    def read(self) -> bytes | None:
+        """
+        Reads the shared memory into a buffer then allocates a bytes object
+        """
+        pass
 
-    # Allocates an bytes object directly without reading to an intermediate buffer
-    # Can be faster but might hold the read lock for longer
-    def read_in_place(self, ignore_same_version: bool) -> bytes: ...
+    def read_in_place(self, ignore_same_version: bool) -> bytes | None:
+        """
+        Allocates an bytes object directly without reading to an intermediate buffer
+        Can be faster but might hold the read lock for longer
+        """
+        pass
 
-    # Amount of bytes allocated in this shared memory
-    def size(self) -> int: ...
+    def name(self) -> str:
+        """
+        :returns: the name of this shared memory file
+        """
+        pass
+
+    def size(self) -> int:
+        """
+        :returns: Amount of bytes allocated in this shared memory
+        """
+        pass
 
 class V4lSharedMemoryWriter:
     def __init__(self, device_path: str, video_width: int, video_height: int, memory_topic: str):...

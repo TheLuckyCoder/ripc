@@ -40,7 +40,7 @@ impl SharedMemory {
 
     pub fn write_message_safe(&mut self, data_to_send: &[u8]) -> Result<(), String> {
         if data_to_send.len() > self.data.len() {
-            return Err(format!("Message is too large to be sent! Max size: {}. Current message size: {}", data_to_send.len(), self.data.len()));
+            return Err(format!("Message is too large to be sent! Max size: {}. Current message size: {}", self.data.len(), data_to_send.len()));
         }
 
         let _guard = unsafe { self.write_lock()? };

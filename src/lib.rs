@@ -1,18 +1,18 @@
+use pyo3::exceptions::PyValueError;
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
-use pyo3::exceptions::PyValueError;
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use v4l::buffer::Type;
-use v4l::{Device, FourCC};
 use v4l::io::mmap::Stream;
 use v4l::io::traits::CaptureStream;
 use v4l::prelude::MmapStream;
 use v4l::video::Capture;
+use v4l::{Device, FourCC};
 
 use crate::memory_manager::SharedMemoryManager;
 use crate::shared_memory::read_message;
@@ -24,35 +24,43 @@ mod shared_memory;
 #[pyo3(frozen)]
 struct SharedMemoryWriter {
     shared_memory: SharedMemoryManager,
+    name: String,
 }
 
 #[pymethods]
 impl SharedMemoryWriter {
     #[new]
-    fn new(topic: &str, size_mb: u32) -> PyResult<Self> {
-        if size_mb == 0 {
+    fn new(name: String, size: u32) -> PyResult<Self> {
+        if size == 0 {
             return Err(PyValueError::new_err("Size cannot be 0"));
         }
-        if topic.is_empty() {
+        if name.is_empty() {
             return Err(PyValueError::new_err("Topic cannot be empty"));
         }
+        let name = if name.starts_with('/') {
+            name
+        } else {
+            format!("/{name}")
+        };
+        
+        let c_name = CString::new(name.clone())?;
+        let shared_memory = SharedMemoryManager::create(c_name, size as usize)?;
 
-        let c_topic = CString::new(topic)?;
-        // Convert to bytes
-        let size = size_mb as usize * 1024 * 1024;
-        let shared_memory = SharedMemoryManager::create(c_topic.clone(), size)?;
-
-        Ok(Self {
-            shared_memory,
-        })
+        Ok(Self { shared_memory, name })
     }
 
     fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
         let shared_memory = unsafe { &mut *self.shared_memory.get_ptr() };
         py.allow_threads(|| {
-            shared_memory.write_message_safe(data).map_err(PyValueError::new_err)
+            shared_memory
+                .write_message_safe(data)
+                .map_err(PyValueError::new_err)
         })?;
         Ok(())
+    }
+    
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn size(&self) -> usize {
@@ -64,6 +72,7 @@ impl SharedMemoryWriter {
 #[pyo3(frozen)]
 struct SharedMemoryReader {
     shared_memory: SharedMemoryManager,
+    name: String,
     last_version_read: Cell<usize>,
     buffer: RefCell<Vec<u8>>,
 }
@@ -71,23 +80,28 @@ struct SharedMemoryReader {
 #[pymethods]
 impl SharedMemoryReader {
     #[new]
-    fn new(topic: &str) -> PyResult<Self> {
-        let c_topic = &CString::new(topic)?;
-        let shared_memory = SharedMemoryManager::open(c_topic)?;
+    fn new(name: String) -> PyResult<Self> {
+        let name = if name.starts_with('/') {
+            name
+        } else {
+            format!("/{name}")
+        };
+        let c_name = &CString::new(name.clone())?;
+        let shared_memory = SharedMemoryManager::open(c_name)?;
 
         Ok(Self {
             buffer: RefCell::new(vec![0u8; shared_memory.memory_size()]),
+            name,
             shared_memory,
             last_version_read: Cell::new(0),
         })
     }
 
-    fn read(&self, py: Python<'_>) -> PyObject {
+    fn read(&self, py: Python<'_>) -> Option<PyObject> {
         let mut last_version = self.last_version_read.get();
 
         let mut buffer = self.buffer.borrow_mut();
 
-        let start = Instant::now();
         let bytes_read = {
             let message = unsafe { &*self.shared_memory.get_ptr() };
             let buffer = buffer.as_mut_slice();
@@ -96,16 +110,17 @@ impl SharedMemoryReader {
                 read_message(message, &mut last_version, buffer).unwrap_or_default()
             })
         };
-        println!("Entire reading: {:?}", start.elapsed());
+
+        if bytes_read == 0 {
+            return None;
+        }
 
         self.last_version_read.set(last_version);
-        PyBytes::new_bound(py, &buffer[..bytes_read]).into_py(py)
+        Some(PyBytes::new_bound(py, &buffer[..bytes_read]).into_py(py))
     }
 
-    fn read_in_place(&self, py: Python<'_>, ignore_same_version: bool) -> PyObject {
+    fn read_in_place(&self, py: Python<'_>, ignore_same_version: bool) -> Option<PyObject> {
         let mut last_version = self.last_version_read.get();
-
-        let start = Instant::now();
 
         let message = unsafe { &*self.shared_memory.get_ptr() };
 
@@ -119,10 +134,17 @@ impl SharedMemoryReader {
                 message.message_size
             }
         };
-        println!("Entire reading: {:?}", start.elapsed());
+
+        if bytes_read == 0 {
+            return None;
+        }
 
         self.last_version_read.set(last_version);
-        PyBytes::new_bound(py, &message.data[..bytes_read]).into_py(py)
+        Some(PyBytes::new_bound(py, &message.data[..bytes_read]).into_py(py))
+    }
+
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn size(&self) -> usize {
@@ -139,7 +161,12 @@ struct V4lSharedMemoryWriter {
 #[pymethods]
 impl V4lSharedMemoryWriter {
     #[new]
-    fn new(device_path: &str, video_width: u32, video_height: u32, memory_topic: &str) -> PyResult<Self> {
+    fn new(
+        device_path: &str,
+        video_width: u32,
+        video_height: u32,
+        memory_topic: &str,
+    ) -> PyResult<Self> {
         if video_width == 0 || video_height == 0 {
             return Err(PyValueError::new_err("Invalid width or height"));
         }
@@ -164,7 +191,7 @@ impl V4lSharedMemoryWriter {
 
         let is_running = Arc::new(AtomicBool::new(true));
         let this = Self {
-            is_running: is_running.clone()
+            is_running: is_running.clone(),
         };
 
         std::thread::spawn(move || {
