@@ -25,7 +25,7 @@ class SharedMemoryWriter(object):
         pass
 
 class SharedMemoryReader:
-    def __init__(self, topic: str): ...
+    def __init__(self, name: str): ...
 
     def read(self) -> bytes | None:
         """
@@ -57,3 +57,25 @@ class V4lSharedMemoryWriter:
 
     # Stops the video transmission, the object cannot be used afterwards
     def stop(self) -> None: ...
+
+class SharedMemoryCircularQueue:
+    def __init__(self, device_path: str, create: bool=False, element_size:int=0, elements_count:int=0):
+        pass
+    
+    def __len__(self) -> int:
+        pass
+
+    def is_full(self) -> bool:
+        pass
+    
+    def try_read(self) -> bytes | None:
+        pass
+    
+    def blocking_read(self) -> bytes | None:
+        pass
+    
+    def try_write(self, data: bytes) -> bool:
+        pass
+    
+    def blocking_write(self, data: bytes):
+        pass

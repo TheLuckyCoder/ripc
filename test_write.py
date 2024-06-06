@@ -4,7 +4,7 @@ import cv2
 
 images = [cv2.imread('img_0.png'), cv2.imread('img_1.png'), cv2.imread('img_2.png')]
 
-writer = ripc.SharedMemoryWriter("/image", 30)
+writer = ripc.SharedMemoryWriter("/image", 100 * 1024 * 1024)
 index = 0
 while True:
     tobytes = images[index % 3].tobytes()
