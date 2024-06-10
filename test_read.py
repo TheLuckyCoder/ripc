@@ -4,11 +4,14 @@ import ripc
 import cv2
 import numpy
 
-reader = ripc.SharedMemoryReader("/image")
+reader = ripc.SharedMemoryReader("image")
 print("initialized")
 while True:
     start_time = time.perf_counter()
-    byte = reader.read()
+    byte = reader.read(ignore_same_version=True)
+    while byte is None:
+        byte = reader.read(ignore_same_version=True)
+
     end_time = time.perf_counter() - start_time
     print(end_time * 1000)
     # print(len(byte))

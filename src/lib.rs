@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::circle_buffer::CircularBuffer;
 use pyo3::exceptions::PyValueError;
@@ -15,12 +15,12 @@ use v4l::video::Capture;
 use v4l::{Device, FourCC};
 
 use crate::memory_holder::SharedMemoryHolder;
-use crate::pthread_lock::{PThreadLock, PThreadRwLock};
-use crate::shared_memory::{read_message, SharedMemory};
+use crate::shared_memory::{ReadingResult, SharedMemoryMessage};
+use crate::utils::pthread_lock::pthread_lock_initialize_at;
+use crate::utils::pthread_rw_lock::pthread_rw_lock_initialize_at;
 
 mod circle_buffer;
 mod memory_holder;
-mod pthread_lock;
 mod shared_memory;
 mod utils;
 
@@ -29,6 +29,7 @@ mod utils;
 struct SharedMemoryWriter {
     shared_memory: SharedMemoryHolder,
     name: String,
+    message_length: usize,
 }
 
 #[pymethods]
@@ -43,22 +44,29 @@ impl SharedMemoryWriter {
         }
 
         let c_name = CString::new(name.clone())?;
-        let shared_memory = SharedMemoryHolder::create(c_name, size as usize)?;
-        unsafe { PThreadRwLock::initialize_at(shared_memory.ptr().cast())? };
+        let shared_memory = SharedMemoryHolder::create(
+            c_name,
+            SharedMemoryMessage::size_of_fields() + size as usize,
+        )?;
+        unsafe { pthread_rw_lock_initialize_at(shared_memory.ptr().cast())? };
 
         Ok(Self {
             shared_memory,
             name,
+            message_length: size as usize,
         })
     }
 
     fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
-        let shared_memory = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemory) };
+        let shared_memory =
+            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+
         py.allow_threads(|| {
             shared_memory
                 .write_message(data)
                 .map_err(PyValueError::new_err)
         })?;
+
         Ok(())
     }
 
@@ -66,8 +74,28 @@ impl SharedMemoryWriter {
         &self.name
     }
 
-    fn size(&self) -> usize {
+    fn total_allocated_size(&self) -> usize {
         self.shared_memory.memory_size()
+    }
+
+    fn size(&self) -> usize {
+        self.message_length
+    }
+
+    fn close(&self) -> PyResult<()> {
+        let shared_memory =
+            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let mut content = shared_memory.lock.write_lock()?;
+
+        content.closed = true;
+
+        Ok(())
+    }
+}
+
+impl Drop for SharedMemoryWriter {
+    fn drop(&mut self) {
+        self.close().unwrap();
     }
 }
 
@@ -76,6 +104,7 @@ impl SharedMemoryWriter {
 struct SharedMemoryReader {
     shared_memory: SharedMemoryHolder,
     name: String,
+    message_length: usize,
     last_version_read: Cell<usize>,
     buffer: RefCell<Vec<u8>>,
 }
@@ -86,60 +115,89 @@ impl SharedMemoryReader {
     fn new(name: String) -> PyResult<Self> {
         let c_name = &CString::new(name.clone())?;
         let shared_memory = SharedMemoryHolder::open(c_name)?;
+        
+        // Read the message length
+        let message = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let message_length = message.lock.read_lock().unwrap().data.len();
 
         Ok(Self {
             buffer: RefCell::new(vec![0u8; shared_memory.memory_size()]),
             name,
+            message_length,
             shared_memory,
             last_version_read: Cell::new(0),
         })
     }
 
-    fn read(&self, py: Python<'_>) -> Option<PyObject> {
+    #[pyo3(signature = (micros_between_reads=1000))]
+    fn blocking_read(
+        &self,
+        py: Python<'_>,
+        micros_between_reads: u64,
+    ) -> PyResult<Option<PyObject>> {
+        let sleep_duration = Duration::from_micros(if micros_between_reads == 0 {
+            1
+        } else {
+            micros_between_reads
+        });
         let mut last_version = self.last_version_read.get();
-
         let mut buffer = self.buffer.borrow_mut();
 
-        let bytes_read = {
-            let message = unsafe { &*(self.shared_memory.slice_ptr() as *mut SharedMemory) };
+        let bytes_read: usize = {
+            let message = unsafe { &*(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
             let buffer = buffer.as_mut_slice();
 
-            py.allow_threads(|| {
-                read_message(message, &mut last_version, buffer).unwrap_or_default()
-            })
+            py.allow_threads(|| loop {
+                match message.read_message(&mut last_version, buffer) {
+                    ReadingResult::MessageSize(size) => break Ok(size),
+                    ReadingResult::SameVersion => {}
+                    ReadingResult::Closed => break Ok(0),
+                    ReadingResult::FailedCreatingLock(e) => break Err(e),
+                }
+
+                std::thread::sleep(sleep_duration);
+            })?
         };
 
         if bytes_read == 0 {
-            return None;
+            return Ok(None);
         }
 
         self.last_version_read.set(last_version);
-        Some(PyBytes::new_bound(py, &buffer[..bytes_read]).into_py(py))
+        Ok(Some(
+            PyBytes::new_bound(py, &buffer[..bytes_read]).into_py(py),
+        ))
     }
 
-    #[pyo3(signature = (ignore_same_version=false))]
-    fn read_in_place(&self, py: Python<'_>, ignore_same_version: bool) -> Option<PyObject> {
+    #[pyo3(signature = (ignore_same_version=true))]
+    fn read(&self, py: Python<'_>, ignore_same_version: bool) -> PyResult<Option<PyObject>> {
         let mut last_version = self.last_version_read.get();
 
-        let message = unsafe { &*(self.shared_memory.slice_ptr() as *mut SharedMemory) };
+        let message = unsafe { &*(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
 
-        let _guard = unsafe { message.lock.read_lock() };
+        let content = message.lock.read_lock()?;
+        if content.closed {
+            return Ok(None);
+        }
+
         let bytes_read = {
-            let message_version = message.version;
+            let message_version = content.version;
             if ignore_same_version && message_version == last_version {
                 0 // There is no new data
             } else {
                 last_version = message_version;
-                message.message_size
+                content.message_size
             }
         };
 
         if bytes_read == 0 {
-            return None;
+            return Ok(None);
         }
 
         self.last_version_read.set(last_version);
-        Some(PyBytes::new_bound(py, &message.data[..bytes_read]).into_py(py))
+        Ok(Some(
+            PyBytes::new_bound(py, &content.data[..bytes_read]).into_py(py),
+        ))
     }
 
     fn name(&self) -> &str {
@@ -147,7 +205,15 @@ impl SharedMemoryReader {
     }
 
     fn size(&self) -> usize {
-        self.shared_memory.memory_size()
+        self.message_length
+    }
+
+    fn is_closed(&self) -> PyResult<bool> {
+        let shared_memory =
+            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let content = shared_memory.lock.read_lock()?;
+
+        Ok(content.closed)
     }
 }
 
@@ -181,7 +247,7 @@ impl SharedMemoryCircularQueue {
         }?;
 
         if create {
-            unsafe { PThreadLock::initialize_at(memory_holder.ptr().cast())? };
+            unsafe { pthread_lock_initialize_at(memory_holder.ptr().cast())? };
         }
 
         Ok(Self {
@@ -238,9 +304,7 @@ impl SharedMemoryCircularQueue {
     fn blocking_write(&self, py: Python<'_>, data: &[u8]) {
         let queue = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut CircularBuffer) };
 
-        py.allow_threads(|| {
-            queue.blocking_write(data);
-        });
+        py.allow_threads(|| queue.blocking_write(data));
     }
 }
 
@@ -289,7 +353,7 @@ impl V4lSharedMemoryWriter {
         std::thread::spawn(move || {
             let shared_memory_manager = shared_memory_manager;
             let shared_memory =
-                unsafe { &mut *(shared_memory_manager.slice_ptr() as *mut SharedMemory) };
+                unsafe { &mut *(shared_memory_manager.slice_ptr() as *mut SharedMemoryMessage) };
             let mut buffer = vec![0u8; size];
 
             while is_running.load(Ordering::Relaxed) {

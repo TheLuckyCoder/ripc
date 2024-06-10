@@ -1,3 +1,5 @@
+pub mod pthread_lock;
+pub mod pthread_rw_lock;
 
 pub(crate) fn check_err_lt<T: Ord + Default>(num: T) -> std::io::Result<T> {
     if num < T::default() {

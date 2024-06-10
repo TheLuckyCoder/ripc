@@ -17,26 +17,38 @@ class SharedMemoryWriter(object):
         :returns: the name of this shared memory file
         """
         pass
+    
+    def total_allocated_size(self) -> int:
+        pass
 
     def size(self) -> int:
         """
         :returns: Amount of bytes allocated in this shared memory
         """
         pass
+    
+    def close(self) -> None:
+        """
+        Signals to the readers that they should stop reading from the shared memory
+        """
+        pass
 
 class SharedMemoryReader:
     def __init__(self, name: str): ...
 
-    def read(self) -> bytes | None:
+    def blocking_read(self) -> bytes | None:
         """
-        Reads the shared memory into a buffer then allocates a bytes object
+        Keeps checking the shared memory until there is a new version to read,
+        This function also releases the GIL, while waiting for a new message
+        @:returns the message, or None if the shared memory is closed
         """
         pass
 
-    def read_in_place(self, ignore_same_version: bool) -> bytes | None:
+    def read(self, ignore_same_version: bool=True) -> bytes | None:
         """
         Allocates an bytes object directly without reading to an intermediate buffer
         Can be faster but might hold the read lock for longer
+        :returns the message, or None if it's the same version as the last time or if the shared memory is closed
         """
         pass
 
@@ -51,6 +63,11 @@ class SharedMemoryReader:
         :returns: Amount of bytes allocated in this shared memory
         """
         pass
+    
+    def is_closed(self) -> bool:
+        """
+        Check if the shared memory has been closed by the writer
+        """
 
 class V4lSharedMemoryWriter:
     def __init__(self, device_path: str, video_width: int, video_height: int, memory_topic: str):...
