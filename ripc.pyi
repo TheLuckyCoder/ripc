@@ -17,6 +17,9 @@ class SharedMemoryWriter(object):
         :returns: the name of this shared memory file
         """
         pass
+    
+    def total_allocated_size(self) -> int:
+        pass
 
     def size(self) -> int:
         """

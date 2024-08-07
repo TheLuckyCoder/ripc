@@ -29,6 +29,7 @@ mod utils;
 struct SharedMemoryWriter {
     shared_memory: SharedMemoryHolder,
     name: String,
+    message_length: usize,
 }
 
 #[pymethods]
@@ -52,6 +53,7 @@ impl SharedMemoryWriter {
         Ok(Self {
             shared_memory,
             name,
+            message_length: size as usize,
         })
     }
 
@@ -72,8 +74,28 @@ impl SharedMemoryWriter {
         &self.name
     }
 
-    fn size(&self) -> usize {
+    fn total_allocated_size(&self) -> usize {
         self.shared_memory.memory_size()
+    }
+
+    fn size(&self) -> usize {
+        self.message_length
+    }
+
+    fn close(&self) -> PyResult<()> {
+        let shared_memory =
+            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let mut content = shared_memory.lock.write_lock()?;
+
+        content.closed = true;
+
+        Ok(())
+    }
+}
+
+impl Drop for SharedMemoryWriter {
+    fn drop(&mut self) {
+        self.close().unwrap();
     }
 }
 
@@ -82,6 +104,7 @@ impl SharedMemoryWriter {
 struct SharedMemoryReader {
     shared_memory: SharedMemoryHolder,
     name: String,
+    message_length: usize,
     last_version_read: Cell<usize>,
     buffer: RefCell<Vec<u8>>,
 }
@@ -92,10 +115,15 @@ impl SharedMemoryReader {
     fn new(name: String) -> PyResult<Self> {
         let c_name = &CString::new(name.clone())?;
         let shared_memory = SharedMemoryHolder::open(c_name)?;
+        
+        // Read the message length
+        let message = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let message_length = message.lock.read_lock().unwrap().data.len();
 
         Ok(Self {
             buffer: RefCell::new(vec![0u8; shared_memory.memory_size()]),
             name,
+            message_length,
             shared_memory,
             last_version_read: Cell::new(0),
         })
@@ -113,7 +141,6 @@ impl SharedMemoryReader {
             micros_between_reads
         });
         let mut last_version = self.last_version_read.get();
-
         let mut buffer = self.buffer.borrow_mut();
 
         let bytes_read: usize = {
@@ -152,7 +179,7 @@ impl SharedMemoryReader {
         if content.closed {
             return Ok(None);
         }
-        
+
         let bytes_read = {
             let message_version = content.version;
             if ignore_same_version && message_version == last_version {
@@ -178,7 +205,15 @@ impl SharedMemoryReader {
     }
 
     fn size(&self) -> usize {
-        self.shared_memory.memory_size()
+        self.message_length
+    }
+
+    fn is_closed(&self) -> PyResult<bool> {
+        let shared_memory =
+            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let content = shared_memory.lock.read_lock()?;
+
+        Ok(content.closed)
     }
 }
 
