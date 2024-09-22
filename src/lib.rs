@@ -23,6 +23,7 @@ struct SharedMemoryWriter {
     shared_memory: SharedMemoryHolder,
     name: String,
     message_length: usize,
+    last_written_version: Cell<usize>,
 }
 
 #[pymethods]
@@ -47,6 +48,7 @@ impl SharedMemoryWriter {
             shared_memory,
             name,
             message_length: size as usize,
+            last_written_version: Cell::new(0)
         })
     }
 
@@ -54,11 +56,12 @@ impl SharedMemoryWriter {
         let shared_memory =
             unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
 
-        py.allow_threads(|| {
+        let version_count = py.allow_threads(|| {
             shared_memory
                 .write_message(data)
                 .map_err(PyValueError::new_err)
         })?;
+        self.last_written_version.set(version_count);
 
         Ok(())
     }
@@ -73,6 +76,10 @@ impl SharedMemoryWriter {
 
     fn size(&self) -> usize {
         self.message_length
+    }
+
+    fn last_written_version(&self) -> usize {
+        self.last_written_version.get()
     }
 
     fn close(&self) -> PyResult<()> {
@@ -205,7 +212,11 @@ impl SharedMemoryReader {
 
         Ok(content.version != self.last_version_read.get())
     }
-    
+
+    fn last_read_version(&self) -> usize {
+        self.last_version_read.get()
+    }
+
     fn is_closed(&self) -> PyResult<bool> {
         let shared_memory =
             unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
