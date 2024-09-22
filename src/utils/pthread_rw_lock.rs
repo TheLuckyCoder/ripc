@@ -2,6 +2,7 @@ use libc::pthread_rwlock_t;
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
+use crate::utils::check_err_ne;
 
 #[repr(C)]
 pub(crate) struct PThreadRwLock<T: ?Sized> {
@@ -13,16 +14,16 @@ pub(crate) unsafe fn pthread_rw_lock_initialize_at(ptr: *mut pthread_rwlock_t) -
     let mut attr: MaybeUninit<libc::pthread_rwlockattr_t> = MaybeUninit::uninit();
 
     let attr_ptr = attr.as_mut_ptr();
-    crate::utils::check_err_ne(libc::pthread_rwlockattr_init(attr_ptr))?;
-    crate::utils::check_err_ne(libc::pthread_rwlockattr_setpshared(
+    check_err_ne(libc::pthread_rwlockattr_init(attr_ptr))?;
+    check_err_ne(libc::pthread_rwlockattr_setpshared(
         attr_ptr,
         libc::PTHREAD_PROCESS_SHARED,
     ))?;
-    crate::utils::check_err_ne(libc::pthread_rwlockattr_setkind_np(attr_ptr, 2))?; //libc::PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP)
+    check_err_ne(libc::pthread_rwlockattr_setkind_np(attr_ptr, 2))?; //libc::PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP)
 
-    crate::utils::check_err_ne(libc::pthread_rwlock_init(ptr, attr_ptr))?;
+    check_err_ne(libc::pthread_rwlock_init(ptr, attr_ptr))?;
 
-    crate::utils::check_err_ne(libc::pthread_rwlockattr_destroy(attr_ptr))?;
+    check_err_ne(libc::pthread_rwlockattr_destroy(attr_ptr))?;
     Ok(())
 }
 
@@ -32,7 +33,7 @@ impl<T: ?Sized> PThreadRwLock<T> {
         let ptr = self.get_ptr() as *mut pthread_rwlock_t;
 
         unsafe {
-            crate::utils::check_err_ne(libc::pthread_rwlock_rdlock(ptr))?;
+            check_err_ne(libc::pthread_rwlock_rdlock(ptr))?;
         }
 
         Ok(PThreadReadLockGuard { lock: self })
@@ -42,7 +43,7 @@ impl<T: ?Sized> PThreadRwLock<T> {
         let ptr = self.get_ptr() as *mut pthread_rwlock_t;
 
         unsafe {
-            crate::utils::check_err_ne(libc::pthread_rwlock_wrlock(ptr))?;
+            check_err_ne(libc::pthread_rwlock_wrlock(ptr))?;
         }
 
         Ok(PThreadWriteLockGuard { lock: self })

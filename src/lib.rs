@@ -1,25 +1,18 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crate::circle_buffer::CircularBuffer;
+use crate::circular_queue::CircularBuffer;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use v4l::buffer::Type;
-use v4l::io::traits::CaptureStream;
-use v4l::prelude::MmapStream;
-use v4l::video::Capture;
-use v4l::{Device, FourCC};
 
 use crate::memory_holder::SharedMemoryHolder;
 use crate::shared_memory::{ReadingResult, SharedMemoryMessage};
 use crate::utils::pthread_lock::pthread_lock_initialize_at;
 use crate::utils::pthread_rw_lock::pthread_rw_lock_initialize_at;
 
-mod circle_buffer;
+mod circular_queue;
 mod memory_holder;
 mod shared_memory;
 mod utils;
@@ -118,7 +111,7 @@ impl SharedMemoryReader {
         
         // Read the message length
         let message = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-        let message_length = message.lock.read_lock().unwrap().data.len();
+        let message_length = message.lock.read_lock()?.data.len();
 
         Ok(Self {
             buffer: RefCell::new(vec![0u8; shared_memory.memory_size()]),
@@ -176,9 +169,6 @@ impl SharedMemoryReader {
         let message = unsafe { &*(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
 
         let content = message.lock.read_lock()?;
-        if content.closed {
-            return Ok(None);
-        }
 
         let bytes_read = {
             let message_version = content.version;
@@ -208,6 +198,14 @@ impl SharedMemoryReader {
         self.message_length
     }
 
+    fn check_message_available(&self) -> PyResult<bool> {
+        let shared_memory =
+            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let content = shared_memory.lock.read_lock()?;
+
+        Ok(content.version != self.last_version_read.get())
+    }
+    
     fn is_closed(&self) -> PyResult<bool> {
         let shared_memory =
             unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
@@ -308,7 +306,7 @@ impl SharedMemoryCircularQueue {
     }
 }
 
-#[pyclass]
+/*#[pyclass]
 #[pyo3(frozen)]
 struct V4lSharedMemoryWriter {
     is_running: Arc<AtomicBool>,
@@ -376,12 +374,12 @@ impl V4lSharedMemoryWriter {
     fn stop(&self) {
         self.is_running.store(false, Ordering::Relaxed);
     }
-}
+}*/
 
 #[pymodule]
 fn ripc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SharedMemoryWriter>()?;
     m.add_class::<SharedMemoryReader>()?;
-    m.add_class::<V4lSharedMemoryWriter>()?;
+    // m.add_class::<V4lSharedMemoryWriter>()?;
     Ok(())
 }

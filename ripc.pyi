@@ -36,19 +36,17 @@ class SharedMemoryWriter(object):
 class SharedMemoryReader:
     def __init__(self, name: str): ...
 
+    def read(self, ignore_same_version: bool=True) -> bytes | None:
+        """
+        :returns the message, or None if it's the same version as the last time or if the shared memory is closed
+        """
+        pass
+
     def blocking_read(self) -> bytes | None:
         """
         Keeps checking the shared memory until there is a new version to read,
         This function also releases the GIL, while waiting for a new message
         @:returns the message, or None if the shared memory is closed
-        """
-        pass
-
-    def read(self, ignore_same_version: bool=True) -> bytes | None:
-        """
-        Allocates an bytes object directly without reading to an intermediate buffer
-        Can be faster but might hold the read lock for longer
-        :returns the message, or None if it's the same version as the last time or if the shared memory is closed
         """
         pass
 
@@ -64,16 +62,23 @@ class SharedMemoryReader:
         """
         pass
     
+    def check_message_available(self) -> bool:
+        """
+        Check if the next read with return a new value
+        :return: 
+        """
+        pass
+
     def is_closed(self) -> bool:
         """
         Check if the shared memory has been closed by the writer
         """
 
-class V4lSharedMemoryWriter:
-    def __init__(self, device_path: str, video_width: int, video_height: int, memory_topic: str):...
-
-    # Stops the video transmission, the object cannot be used afterwards
-    def stop(self) -> None: ...
+# class V4lSharedMemoryWriter:
+#     def __init__(self, device_path: str, video_width: int, video_height: int, memory_topic: str):...
+#
+#     Stops the video transmission, the object cannot be used afterwards
+    # def stop(self) -> None: ...
 
 class SharedMemoryCircularQueue:
     def __init__(self, device_path: str, create: bool=False, element_size:int=0, elements_count:int=0):
