@@ -11,8 +11,8 @@ name = "ripc"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.21" }
+pyo3 = { version = "0.22" }
 libc = "0.2"
 rustix = { version = "0.38", default-features = false, features = ["mm", "fs", "shm", "std", "linux_latest"] }
-v4l = { version = "0.14.0", default-features = false, features = ["v4l2"] }
-zune-jpeg = "0.4.11"
+#v4l = { version = "0.14.0", default-features = false, features = ["v4l2"] }
+#zune-jpeg = "0.4.11"

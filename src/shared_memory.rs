@@ -52,7 +52,10 @@ impl SharedMemoryMessage {
     }
 
     pub fn read_message(&self, last_read_version: &mut usize, buffer: &mut [u8]) -> ReadingResult {
-        let content = self.lock.read_lock().unwrap();
+        let content = match self.lock.read_lock() {
+            Ok(content) => content,
+            Err(e) => return ReadingResult::FailedCreatingLock(e),
+        };
 
         if content.closed {
             return ReadingResult::Closed;
