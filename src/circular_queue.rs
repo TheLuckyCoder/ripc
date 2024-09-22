@@ -30,7 +30,7 @@ impl CircularBuffer {
             return false;
         }
 
-        content.write_internal(value);
+        content.write(value);
 
         true
     }
@@ -43,7 +43,7 @@ impl CircularBuffer {
                 continue;
             }
 
-            content.write_internal(value);
+            content.write(value);
             break;
         }
     }
@@ -68,7 +68,7 @@ impl CircularBuffer {
                 continue;
             }
 
-            content.write_internal(value);
+            content.write(value);
             break;
         }
     }
@@ -101,16 +101,20 @@ impl CircularBufferContent {
         }
     }
 
-    pub(crate) fn write_internal(&mut self, value: &[u8]) {
+    pub(crate) fn write(&mut self, value: &[u8]) {
         assert!(value.len() < self.elem_size);
         let buffer_index = self.writer_index * self.elem_size;
         self.inc_write_index();
+        self.full = self.writer_index == self.reader_index;
+        
         self.buffer[buffer_index..buffer_index + value.len()].clone_from_slice(value);
     }
 
     pub(crate) fn read(&mut self, value: &mut [u8]) {
         let buffer_index = self.reader_index * self.elem_size;
         self.inc_read_index();
+        self.full = false;
+        
         value.clone_from_slice(&self.buffer[buffer_index..buffer_index + value.len()]);
     }
 
