@@ -6,7 +6,6 @@ use crate::circular_queue::CircularBuffer;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-
 use crate::memory_holder::SharedMemoryHolder;
 use crate::shared_memory::{ReadingResult, SharedMemoryMessage};
 use crate::utils::pthread_lock::pthread_lock_initialize_at;
@@ -48,7 +47,7 @@ impl SharedMemoryWriter {
             shared_memory,
             name,
             message_length: size as usize,
-            last_written_version: Cell::new(0)
+            last_written_version: Cell::new(0),
         })
     }
 
@@ -115,7 +114,7 @@ impl SharedMemoryReader {
     fn new(name: String) -> PyResult<Self> {
         let c_name = &CString::new(name.clone())?;
         let shared_memory = SharedMemoryHolder::open(c_name)?;
-        
+
         // Read the message length
         let message = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
         let message_length = message.lock.read_lock()?.data.len();
@@ -170,7 +169,7 @@ impl SharedMemoryReader {
     }
 
     #[pyo3(signature = (ignore_same_version=true))]
-    fn read(&self, py: Python<'_>, ignore_same_version: bool) -> PyResult<Option<PyObject>> {
+    fn try_read(&self, py: Python<'_>, ignore_same_version: bool) -> PyResult<Option<PyObject>> {
         let mut last_version = self.last_version_read.get();
 
         let message = unsafe { &*(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
@@ -236,33 +235,48 @@ struct SharedMemoryCircularQueue {
 
 #[pymethods]
 impl SharedMemoryCircularQueue {
-    #[new]
-    #[pyo3(signature = (name, create=false, element_size=0, elements_count=0))]
-    fn new(name: String, create: bool, element_size: u32, elements_count: u32) -> PyResult<Self> {
+    #[staticmethod]
+    fn create(
+        name: String,
+        element_size: usize,
+        elements_count: usize,
+    ) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Topic cannot be empty"));
         }
 
         let c_name = CString::new(name.clone())?;
-        let memory_holder = if create {
-            if element_size == 0 || elements_count == 0 {
-                return Err(PyValueError::new_err("Size cannot be 0"));
-            }
-
-            let buffer_size = element_size as usize * elements_count as usize;
-            SharedMemoryHolder::create(c_name, CircularBuffer::size_of_fields() + buffer_size)
-        } else {
-            SharedMemoryHolder::open(c_name.as_c_str())
-        }?;
-
-        if create {
-            unsafe { pthread_lock_initialize_at(memory_holder.ptr().cast())? };
+        if element_size == 0 || elements_count == 0 {
+            return Err(PyValueError::new_err("Size cannot be 0"));
         }
+        let buffer_size = (size_of::<circular_queue::ElementSizeType>() + element_size) * elements_count;
+        let memory_holder =
+            SharedMemoryHolder::create(c_name, CircularBuffer::size_of_fields() + buffer_size)?;
+
+        unsafe { pthread_lock_initialize_at(memory_holder.ptr().cast())? };
 
         Ok(Self {
             shared_memory: memory_holder,
             name,
-            buffer: RefCell::new(vec![0u8; element_size as usize]),
+            buffer: RefCell::new(vec![0u8; element_size]),
+        })
+    }
+    
+    #[staticmethod]
+    fn open(name: String) -> PyResult<Self> {
+        if name.is_empty() {
+            return Err(PyValueError::new_err("Topic cannot be empty"));
+        }
+
+        let c_name = CString::new(name.clone())?;
+        let memory_holder = SharedMemoryHolder::open(c_name.as_c_str())?;
+        
+        let queue = unsafe { &mut *(memory_holder.slice_ptr() as *mut CircularBuffer) };
+
+        Ok(Self {
+            shared_memory: memory_holder,
+            name,
+            buffer: RefCell::new(vec![0u8; queue.max_element_size()]),
         })
     }
 
@@ -317,80 +331,10 @@ impl SharedMemoryCircularQueue {
     }
 }
 
-/*#[pyclass]
-#[pyo3(frozen)]
-struct V4lSharedMemoryWriter {
-    is_running: Arc<AtomicBool>,
-}
-
-#[pymethods]
-impl V4lSharedMemoryWriter {
-    #[new]
-    fn new(
-        device_path: &str,
-        video_width: u32,
-        video_height: u32,
-        memory_topic: &str,
-    ) -> PyResult<Self> {
-        if video_width == 0 || video_height == 0 {
-            return Err(PyValueError::new_err("Invalid width or height"));
-        }
-        if memory_topic.is_empty() {
-            return Err(PyValueError::new_err("Topic cannot be empty"));
-        }
-
-        let c_topic = CString::new(memory_topic)?;
-        let size = video_width as usize * video_height as usize * 10;
-        let shared_memory_manager = SharedMemoryHolder::create(c_topic.clone(), size)?;
-
-        let dev = Device::with_path(device_path).expect("Failed to open device");
-        let mut fmt = dev.format().expect("Failed to read format");
-        fmt.width = video_width;
-        fmt.height = video_height;
-        fmt.fourcc = FourCC::new(b"MJPG");
-
-        let fmt = dev.set_format(&fmt).expect("Failed to write format");
-        println!("Configured device with format: {}", fmt);
-        let mut stream = MmapStream::with_buffers(&dev, Type::VideoCapture, 2)
-            .expect("Failed to create buffer stream");
-
-        let is_running = Arc::new(AtomicBool::new(true));
-        let this = Self {
-            is_running: is_running.clone(),
-        };
-
-        std::thread::spawn(move || {
-            let shared_memory_manager = shared_memory_manager;
-            let shared_memory =
-                unsafe { &mut *(shared_memory_manager.slice_ptr() as *mut SharedMemoryMessage) };
-            let mut buffer = vec![0u8; size];
-
-            while is_running.load(Ordering::Relaxed) {
-                let (frame_data, _meta_data) = stream.next().unwrap();
-                let now = Instant::now();
-                let mut decoder = zune_jpeg::JpegDecoder::new(frame_data);
-                if let Err(e) = decoder.decode_into(&mut buffer) {
-                    println!("Failed to decode frame: {e}")
-                } else {
-                    let i = decoder.output_buffer_size().unwrap();
-                    shared_memory.write_message(&buffer[..i]).unwrap();
-                }
-                println!("Writing took: {:?}", now.elapsed());
-            }
-        });
-
-        Ok(this)
-    }
-
-    fn stop(&self) {
-        self.is_running.store(false, Ordering::Relaxed);
-    }
-}*/
-
 #[pymodule]
 fn ripc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SharedMemoryWriter>()?;
     m.add_class::<SharedMemoryReader>()?;
-    // m.add_class::<V4lSharedMemoryWriter>()?;
+    m.add_class::<SharedMemoryCircularQueue>()?;
     Ok(())
 }

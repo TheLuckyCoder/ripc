@@ -40,7 +40,7 @@ class SharedMemoryWriter(object):
 class SharedMemoryReader:
     def __init__(self, name: str): ...
 
-    def read(self, ignore_same_version: bool = True) -> bytes | None:
+    def try_read(self, ignore_same_version: bool = True) -> bytes | None:
         """
         :returns: the message, or None if it's the same version as the last time or if the shared memory is closed
         """
@@ -82,14 +82,13 @@ class SharedMemoryReader:
         """
 
 
-# class V4lSharedMemoryWriter:
-#     def __init__(self, device_path: str, video_width: int, video_height: int, memory_topic: str):...
-#
-#     Stops the video transmission, the object cannot be used afterward
-# def stop(self) -> None: ...
-
 class SharedMemoryCircularQueue:
-    def __init__(self, device_path: str, create: bool = False, element_size: int = 0, elements_count: int = 0):
+    @staticmethod
+    def create(name: str, element_size: int, elements_count: int):
+        pass
+    
+    @staticmethod
+    def open(name: str):
         pass
 
     def __len__(self) -> int:
