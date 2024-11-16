@@ -95,16 +95,37 @@ class SharedMemoryCircularQueue:
         pass
 
     def is_full(self) -> bool:
+        """
+        Checks if the queue is full
+        """
         pass
 
     def try_read(self) -> bytes | None:
+        """
+        :returns: an element or None, if the queue is empty
+        """
         pass
 
-    def blocking_read(self) -> bytes | None:
+    def blocking_read(self) -> bytes:
+        """
+        Blocks the current thread until an element is available
+        :return: an element from the queue
+        """
         pass
 
     def try_write(self, data: bytes) -> bool:
+        """
+        Tries to write an element to the queue, fails if it's full
+        
+        :param data: element to add to queue
+        :return: true if the operation was successful
+        """
         pass
 
     def blocking_write(self, data: bytes):
+        """
+        Blocks the current thread until the element is added to the queue
+        
+        :param data: element to add to queue
+        """
         pass
