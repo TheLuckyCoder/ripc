@@ -1,15 +1,17 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::ffi::CString;
+use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::circular_queue::CircularBuffer;
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::PyBytes;
 use crate::memory_holder::SharedMemoryHolder;
 use crate::shared_memory::{ReadingResult, SharedMemoryMessage};
 use crate::utils::pthread_lock::pthread_lock_initialize_at;
 use crate::utils::pthread_rw_lock::pthread_rw_lock_initialize_at;
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 mod circular_queue;
 mod memory_holder;
@@ -22,32 +24,31 @@ struct SharedMemoryWriter {
     shared_memory: SharedMemoryHolder,
     name: String,
     message_length: usize,
-    last_written_version: Cell<usize>,
+    last_written_version: AtomicUsize,
 }
 
 #[pymethods]
 impl SharedMemoryWriter {
     #[new]
-    fn new(name: String, size: u32) -> PyResult<Self> {
-        if size == 0 {
-            return Err(PyValueError::new_err("Size cannot be 0"));
-        }
-        if name.is_empty() {
-            return Err(PyValueError::new_err("Topic cannot be empty"));
-        }
+    fn new(name: String, size: NonZeroU32) -> PyResult<Self> {
+        // if name.is_empty() {
+        //     return Err(PyValueError::new_err("Topic cannot be empty"));
+        // }
 
         let c_name = CString::new(name.clone())?;
+        let size = size.get() as usize;
+        
         let shared_memory = SharedMemoryHolder::create(
             c_name,
-            SharedMemoryMessage::size_of_fields() + size as usize,
+            SharedMemoryMessage::size_of_fields() + size,
         )?;
         unsafe { pthread_rw_lock_initialize_at(shared_memory.ptr().cast())? };
 
         Ok(Self {
             shared_memory,
             name,
-            message_length: size as usize,
-            last_written_version: Cell::new(0),
+            message_length: size,
+            last_written_version: AtomicUsize::default(),
         })
     }
 
@@ -58,9 +59,8 @@ impl SharedMemoryWriter {
         let version_count = py.allow_threads(|| {
             shared_memory
                 .write_message(data)
-                .map_err(PyValueError::new_err)
         })?;
-        self.last_written_version.set(version_count);
+        self.last_written_version.store(version_count, Ordering::Relaxed);
 
         Ok(())
     }
@@ -78,7 +78,7 @@ impl SharedMemoryWriter {
     }
 
     fn last_written_version(&self) -> usize {
-        self.last_written_version.get()
+        self.last_written_version.load(Ordering::Relaxed)
     }
 
     fn close(&self) -> PyResult<()> {
@@ -92,6 +92,8 @@ impl SharedMemoryWriter {
     }
 }
 
+unsafe impl Sync for SharedMemoryWriter {}
+
 impl Drop for SharedMemoryWriter {
     fn drop(&mut self) {
         self.close().unwrap();
@@ -104,7 +106,7 @@ struct SharedMemoryReader {
     shared_memory: SharedMemoryHolder,
     name: String,
     message_length: usize,
-    last_version_read: Cell<usize>,
+    last_version_read: AtomicUsize,
     buffer: RefCell<Vec<u8>>,
 }
 
@@ -124,7 +126,7 @@ impl SharedMemoryReader {
             name,
             message_length,
             shared_memory,
-            last_version_read: Cell::new(0),
+            last_version_read: AtomicUsize::default()
         })
     }
 
@@ -139,7 +141,7 @@ impl SharedMemoryReader {
         } else {
             micros_between_reads
         });
-        let mut last_version = self.last_version_read.get();
+        let mut last_version = self.last_version_read.load(Ordering::Relaxed);
         let mut buffer = self.buffer.borrow_mut();
 
         let bytes_read: usize = {
@@ -162,15 +164,15 @@ impl SharedMemoryReader {
             return Ok(None);
         }
 
-        self.last_version_read.set(last_version);
+        self.last_version_read.store(last_version, Ordering::Relaxed);
         Ok(Some(
-            PyBytes::new_bound(py, &buffer[..bytes_read]).into_py(py),
+            PyBytes::new(py, &buffer[..bytes_read]).into_py(py),
         ))
     }
 
     #[pyo3(signature = (ignore_same_version=true))]
     fn try_read(&self, py: Python<'_>, ignore_same_version: bool) -> PyResult<Option<PyObject>> {
-        let mut last_version = self.last_version_read.get();
+        let mut last_version = self.last_version_read.load(Ordering::Relaxed);
 
         let message = unsafe { &*(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
 
@@ -190,9 +192,9 @@ impl SharedMemoryReader {
             return Ok(None);
         }
 
-        self.last_version_read.set(last_version);
+        self.last_version_read.store(last_version, Ordering::Relaxed);
         Ok(Some(
-            PyBytes::new_bound(py, &content.data[..bytes_read]).into_py(py),
+            PyBytes::new(py, &content.data[..bytes_read]).into_py(py),
         ))
     }
 
@@ -209,11 +211,11 @@ impl SharedMemoryReader {
             unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
         let content = shared_memory.lock.read_lock()?;
 
-        Ok(content.version != self.last_version_read.get())
+        Ok(content.version != self.last_version_read.load(Ordering::Relaxed))
     }
 
     fn last_read_version(&self) -> usize {
-        self.last_version_read.get()
+        self.last_version_read.load(Ordering::Relaxed)
     }
 
     fn is_closed(&self) -> PyResult<bool> {
@@ -225,12 +227,20 @@ impl SharedMemoryReader {
     }
 }
 
+unsafe impl Sync for SharedMemoryReader {}
+
 #[pyclass]
 #[pyo3(frozen)]
 struct SharedMemoryCircularQueue {
     shared_memory: SharedMemoryHolder,
     name: String,
     buffer: RefCell<Vec<u8>>,
+}
+
+impl SharedMemoryCircularQueue {
+    fn get_queue(&self) -> &CircularBuffer {
+        unsafe { &*(self.shared_memory.slice_ptr() as *const CircularBuffer) }
+    }
 }
 
 #[pymethods]
@@ -284,13 +294,11 @@ impl SharedMemoryCircularQueue {
     }
 
     fn __len__(&self) -> usize {
-        let queue = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut CircularBuffer) };
-        queue.len()
+        self.get_queue().len()
     }
 
     fn is_full(&self) -> bool {
-        let queue = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut CircularBuffer) };
-        queue.is_full()
+        self.get_queue().is_full()
     }
 
     fn name(&self) -> &str {
@@ -298,47 +306,43 @@ impl SharedMemoryCircularQueue {
     }
 
     fn try_read(&self, py: Python<'_>) -> Option<PyObject> {
-        let queue = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut CircularBuffer) };
-
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
 
-        if queue.try_read(buffer) {
-            Some(PyBytes::new_bound(py, buffer).into_py(py))
+        if self.get_queue().try_read(buffer) {
+            Some(PyBytes::new(py, buffer).into_py(py))
         } else {
             None
         }
     }
 
     fn blocking_read(&self, py: Python<'_>) -> PyObject {
-        let queue = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut CircularBuffer) };
+        let queue = self.get_queue();
 
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
 
         py.allow_threads(|| queue.blocking_read(buffer));
 
-        PyBytes::new_bound(py, buffer).into_py(py)
+        PyBytes::new(py, buffer).into_py(py)
     }
     
     fn read_all(&self) -> Vec<Vec<u8>> {
-        let queue = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut CircularBuffer) };
-        
-        queue.read_all()
+        self.get_queue().read_all()
     }
 
     fn try_write(&self, data: &[u8]) -> bool {
-        let queue = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut CircularBuffer) };
-
-        queue.try_write(data)
+        self.get_queue().try_write(data)
     }
 
     fn blocking_write(&self, py: Python<'_>, data: &[u8]) {
-        let queue = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut CircularBuffer) };
+        let queue = self.get_queue();
 
         py.allow_threads(|| queue.blocking_write(data));
     }
 }
+
+unsafe impl Sync for SharedMemoryCircularQueue {}
 
 #[pymodule]
 fn ripc(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -16,7 +16,7 @@ impl CircularBuffer {
         content.max_element_size = max_element_size as u32;
         content.capacity = capacity as u32;
     }
-    
+
     pub(crate) fn len(&self) -> usize {
         let content = self.content.lock().unwrap();
 
@@ -40,7 +40,7 @@ impl CircularBuffer {
         true
     }
 
-    pub(crate) fn blocking_write(&mut self, value: &[u8]) {
+    pub(crate) fn blocking_write(&self, value: &[u8]) {
         loop {
             let mut content = self.content.lock().unwrap();
             if content.full {
@@ -65,7 +65,7 @@ impl CircularBuffer {
         true
     }
 
-    pub(crate) fn blocking_read(&mut self, value: &mut [u8]) {
+    pub(crate) fn blocking_read(&self, value: &mut [u8]) {
         loop {
             let mut content = self.content.lock().unwrap();
             if content.len() == 0 {
@@ -82,7 +82,7 @@ impl CircularBuffer {
         let content = self.content.lock().unwrap();
         content.max_element_size as usize
     }
-    
+
     pub(crate) fn read_all(&self) -> Vec<Vec<u8>> {
         let mut content = self.content.lock().unwrap();
         let size = content.len() as usize;
@@ -111,6 +111,8 @@ struct CircularBufferContent {
 
 pub type ElementSizeType = usize;
 
+const ELEMENT_SIZE_TYPE: usize = size_of::<ElementSizeType>();
+
 impl CircularBufferContent {
     pub(crate) fn len(&self) -> u32 {
         if self.full {
@@ -128,8 +130,8 @@ impl CircularBufferContent {
         self.writer_index = self.next_inc(self.writer_index);
         self.full = self.writer_index == self.reader_index;
 
-        let buffer_index = (self.writer_index * self.max_element_size) as usize;
-        let data_index = buffer_index + size_of::<ElementSizeType>();
+        let buffer_index = (self.writer_index * (ELEMENT_SIZE_TYPE as u32 + self.max_element_size)) as usize;
+        let data_index = buffer_index + ELEMENT_SIZE_TYPE;
         let element_size = value.len();
 
         self.buffer[buffer_index..data_index].clone_from_slice(&(element_size as ElementSizeType).to_ne_bytes());
@@ -141,10 +143,10 @@ impl CircularBufferContent {
         self.reader_index = self.next_inc(self.reader_index);
         self.full = false;
 
-        let buffer_index = (self.writer_index * self.max_element_size) as usize;
-        let data_index = buffer_index + size_of::<ElementSizeType>();
+        let buffer_index = (self.reader_index * (ELEMENT_SIZE_TYPE as u32 + self.max_element_size)) as usize;
+        let data_index = buffer_index + ELEMENT_SIZE_TYPE;
         let element_size = ElementSizeType::from_ne_bytes(
-            self.buffer[buffer_index..buffer_index + size_of::<ElementSizeType>()]
+            self.buffer[buffer_index..buffer_index + ELEMENT_SIZE_TYPE]
                 .try_into()
                 .unwrap(),
         );
