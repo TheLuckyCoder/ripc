@@ -50,6 +50,9 @@ impl<T: ?Sized> PThreadLock<T> {
     }
 }
 
+unsafe impl<T: ?Sized> Send for PThreadLock<T> where T: Send {}
+unsafe impl<T: ?Sized> Sync for PThreadLock<T> where T: Send {}
+
 pub(crate) struct PThreadLockGuard<'a, T: ?Sized> {
     lock: &'a PThreadLock<T>,
 }
@@ -74,4 +77,4 @@ impl<T: ?Sized> Drop for PThreadLockGuard<'_, T> {
 }
 
 unsafe impl<T: ?Sized> Send for PThreadLockGuard<'_, T> where T: Send {}
-unsafe impl<T: ?Sized> Sync for PThreadLockGuard<'_, T> where T: Send {}
+unsafe impl<T: ?Sized> Sync for PThreadLockGuard<'_, T> where T: Send + Sync {}
