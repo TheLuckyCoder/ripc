@@ -10,6 +10,13 @@ pub(crate) struct CircularBuffer {
 }
 
 impl CircularBuffer {
+    pub(crate) fn init(&self, max_element_size: usize, capacity: usize) {
+        let mut content = self.content.lock().unwrap();
+
+        content.max_element_size = max_element_size as u32;
+        content.capacity = capacity as u32;
+    }
+    
     pub(crate) fn len(&self) -> usize {
         let content = self.content.lock().unwrap();
 
@@ -22,7 +29,7 @@ impl CircularBuffer {
         content.full
     }
 
-    pub(crate) fn try_write(&mut self, value: &[u8]) -> bool {
+    pub(crate) fn try_write(&self, value: &[u8]) -> bool {
         let mut content = self.content.lock().unwrap();
         if content.full {
             return false;
@@ -46,7 +53,7 @@ impl CircularBuffer {
         }
     }
 
-    pub(crate) fn try_read(&mut self, value: &mut [u8]) -> bool {
+    pub(crate) fn try_read(&self, value: &mut [u8]) -> bool {
         let mut content = self.content.lock().unwrap();
 
         if content.len() == 0 {
@@ -71,9 +78,20 @@ impl CircularBuffer {
         }
     }
 
-    pub(crate) fn max_element_size(&mut self) -> usize {
+    pub(crate) fn max_element_size(&self) -> usize {
         let content = self.content.lock().unwrap();
         content.max_element_size as usize
+    }
+    
+    pub(crate) fn read_all(&self) -> Vec<Vec<u8>> {
+        let mut content = self.content.lock().unwrap();
+        let size = content.len() as usize;
+        let mut buffer = Vec::with_capacity(content.capacity as usize);
+
+        (0..size).map(|_| {
+            let length = content.read(&mut buffer);
+            buffer[..length].to_vec()
+        }).collect()
     }
 
     pub(crate) const fn size_of_fields() -> usize {
@@ -86,7 +104,7 @@ struct CircularBufferContent {
     writer_index: u32,
     reader_index: u32,
     max_element_size: u32,
-    size: u32,
+    capacity: u32,
     full: bool,
     buffer: [u8],
 }
@@ -96,11 +114,11 @@ pub type ElementSizeType = usize;
 impl CircularBufferContent {
     pub(crate) fn len(&self) -> u32 {
         if self.full {
-            return self.size;
+            return self.capacity;
         }
 
         match self.writer_index.cmp(&self.reader_index) {
-            Ordering::Less => self.size - self.reader_index + self.writer_index,
+            Ordering::Less => self.capacity - self.reader_index + self.writer_index,
             Ordering::Equal => 0,
             Ordering::Greater => self.writer_index - self.reader_index,
         }
@@ -138,6 +156,6 @@ impl CircularBufferContent {
 
     #[inline]
     fn next_inc(&self, i: u32) -> u32 {
-        (i + 1) % self.size
+        (i + 1) % self.capacity
     }
 }
