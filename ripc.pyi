@@ -84,7 +84,7 @@ class SharedMemoryReader:
 
 class SharedMemoryCircularQueue:
     @staticmethod
-    def create(name: str, element_size: int, elements_count: int):
+    def create(name: str, max_element_size: int, capacity: int):
         pass
     
     @staticmethod
@@ -128,4 +128,7 @@ class SharedMemoryCircularQueue:
         
         :param data: element to add to queue
         """
+        pass
+
+    def read_all(self) -> list[bytes]:
         pass

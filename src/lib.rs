@@ -238,27 +238,30 @@ impl SharedMemoryCircularQueue {
     #[staticmethod]
     fn create(
         name: String,
-        element_size: usize,
-        elements_count: usize,
+        max_element_size: usize,
+        capacity: usize,
     ) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Topic cannot be empty"));
         }
 
         let c_name = CString::new(name.clone())?;
-        if element_size == 0 || elements_count == 0 {
+        if max_element_size == 0 || capacity == 0 {
             return Err(PyValueError::new_err("Size cannot be 0"));
         }
-        let buffer_size = (size_of::<circular_queue::ElementSizeType>() + element_size) * elements_count;
+        let buffer_size = (size_of::<circular_queue::ElementSizeType>() + max_element_size) * capacity;
         let memory_holder =
             SharedMemoryHolder::create(c_name, CircularBuffer::size_of_fields() + buffer_size)?;
 
         unsafe { pthread_lock_initialize_at(memory_holder.ptr().cast())? };
+        
+        let queue = unsafe { &mut *(memory_holder.slice_ptr() as *mut CircularBuffer) };
+        queue.init(max_element_size, capacity);
 
         Ok(Self {
             shared_memory: memory_holder,
             name,
-            buffer: RefCell::new(vec![0u8; element_size]),
+            buffer: RefCell::new(vec![0u8; max_element_size]),
         })
     }
     
@@ -316,6 +319,12 @@ impl SharedMemoryCircularQueue {
         py.allow_threads(|| queue.blocking_read(buffer));
 
         PyBytes::new_bound(py, buffer).into_py(py)
+    }
+    
+    fn read_all(&self) -> Vec<Vec<u8>> {
+        let queue = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut CircularBuffer) };
+        
+        queue.read_all()
     }
 
     fn try_write(&self, data: &[u8]) -> bool {
