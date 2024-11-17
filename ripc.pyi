@@ -1,5 +1,3 @@
-from typing_extensions import Buffer
-
 
 class SharedMemoryWriter(object):
     def __init__(self, name: str, size: int):
@@ -43,15 +41,9 @@ class SharedMemoryWriter(object):
 class SharedMemoryReader:
     def __init__(self, name: str): ...
 
-    def try_read(self, ignore_same_version: bool = True) -> bytes | None:
+    def try_read(self) -> bytes | None:
         """
         :returns: the message, or None if it's the same version as the last time or if the shared memory is closed
-        """
-        pass
-
-    def try_read_into(self, buffer: Buffer) -> int:
-        """
-        :returns: the number of bytes written into the buffer
         """
         pass
 
@@ -69,25 +61,29 @@ class SharedMemoryReader:
         """
         pass
 
-    def size(self) -> int:
+    def memory_size(self) -> int:
         """
         :returns: Amount of bytes allocated in this shared memory
         """
         pass
 
-    def check_message_available(self) -> bool:
+    def new_version_available(self) -> bool:
         """
-        Check if the next read with return a new value
-        :return:
+        Check if the next read will return a new message
+        :returns: true if there is a new version
         """
         pass
 
     def last_read_version(self) -> int:
+        """
+        :returns: the latest version that was read
+        """
         pass
 
     def is_closed(self) -> bool:
         """
         Check if the shared memory has been closed by the writer
+        :returns: true if the writer has marked this as closed
         """
 
 
@@ -114,7 +110,7 @@ class SharedMemoryCircularQueue:
         :returns: an element or None, if the queue is empty
         """
         pass
-    
+
     def blocking_read(self) -> bytes:
         """
         Blocks the current thread until an element is available
@@ -144,3 +140,4 @@ class SharedMemoryCircularQueue:
         :returns: a list of all the elements in the queue
         """
         pass
+    
