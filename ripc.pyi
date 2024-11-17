@@ -2,8 +2,8 @@
 class SharedMemoryWriter(object):
     def __init__(self, name: str, size: int):
         """
-        :parameter name is recommended to start with a '/'
-        :parameter size cannot be 0
+        :parameter name: is recommended to start with a '/'
+        :parameter size: cannot be 0
         """
         pass
 
@@ -19,16 +19,16 @@ class SharedMemoryWriter(object):
         """
         pass
 
-    def total_allocated_size(self) -> int:
-        pass
-
-    def size(self) -> int:
+    def memory_size(self) -> int:
         """
         :returns: Amount of bytes allocated in this shared memory
         """
         pass
 
-    def last_written_version(self):
+    def last_written_version(self) -> int:
+        """
+        :returns: the latest version that was written
+        """
         pass
 
     def close(self) -> None:
