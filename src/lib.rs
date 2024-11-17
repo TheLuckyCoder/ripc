@@ -1,17 +1,17 @@
-use std::cell::RefCell;
-use std::ffi::CString;
-use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
-
 use crate::circular_queue::CircularQueue;
 use crate::memory_holder::SharedMemoryHolder;
 use crate::shared_memory::{ReadingResult, SharedMemoryMessage};
 use crate::utils::pthread_lock::pthread_lock_initialize_at;
 use crate::utils::pthread_rw_lock::pthread_rw_lock_initialize_at;
+use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use std::cell::RefCell;
+use std::ffi::CString;
+use std::num::NonZeroU32;
+use std::ptr::slice_from_raw_parts_mut;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod circular_queue;
 mod memory_holder;
@@ -106,6 +106,12 @@ struct SharedMemoryReader {
     buffer: RefCell<Vec<u8>>,
 }
 
+impl SharedMemoryReader {
+    fn get_memory(&self) -> &SharedMemoryMessage {
+        unsafe { &*(self.shared_memory.slice_ptr() as *const SharedMemoryMessage) }
+    }
+}
+
 #[pymethods]
 impl SharedMemoryReader {
     #[new]
@@ -127,72 +133,71 @@ impl SharedMemoryReader {
         })
     }
 
-    #[pyo3(signature = (micros_between_reads=1000))]
-    fn blocking_read(
-        &self,
-        py: Python<'_>,
-        micros_between_reads: u64,
-    ) -> PyResult<Option<PyObject>> {
-        let sleep_duration = Duration::from_micros(if micros_between_reads == 0 {
-            1
-        } else {
-            micros_between_reads
-        });
-        let mut last_version = self.last_version_read.load(Ordering::Relaxed);
-        let mut buffer = self.buffer.borrow_mut();
-
-        let bytes_read: usize = {
-            let message = unsafe { &*(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-            let buffer = buffer.as_mut_slice();
-
-            py.allow_threads(|| loop {
-                match message.read_message(&mut last_version, buffer) {
-                    ReadingResult::MessageSize(size) => break Ok(size),
-                    ReadingResult::SameVersion => {}
-                    ReadingResult::Closed => break Ok(0),
-                    ReadingResult::FailedCreatingLock(e) => break Err(e),
-                }
-
-                std::thread::sleep(sleep_duration);
-            })?
-        };
-
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-
-        self.last_version_read
-            .store(last_version, Ordering::Relaxed);
-        Ok(Some(PyBytes::new(py, &buffer[..bytes_read]).into_py(py)))
-    }
-
-    #[pyo3(signature = (ignore_same_version=true))]
-    fn try_read(&self, py: Python<'_>, ignore_same_version: bool) -> PyResult<Option<PyObject>> {
+    fn try_read(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         let mut last_version = self.last_version_read.load(Ordering::Relaxed);
 
-        let message = unsafe { &*(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-
-        let content = message.lock.read_lock()?;
+        let content = self.get_memory().lock.read_lock()?;
 
         let bytes_read = {
             let message_version = content.version;
-            if ignore_same_version && message_version == last_version {
-                0 // There is no new data
+            if message_version == last_version {
+                return Ok(None);
             } else {
                 last_version = message_version;
                 content.message_size
             }
         };
 
-        if bytes_read == 0 {
-            return Ok(None);
-        }
-
         self.last_version_read
             .store(last_version, Ordering::Relaxed);
         Ok(Some(
             PyBytes::new(py, &content.data[..bytes_read]).into_py(py),
         ))
+    }
+
+    fn try_read_into(&self, buffer_obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+        let buffer = PyBuffer::<u8>::get(buffer_obj)?;
+        if !buffer.readonly() || !buffer.is_c_contiguous() {
+            return Err(PyValueError::new_err(
+                "Buffer is not readable or not contiguous",
+            ));
+        }
+        
+        let buffer_ptr = buffer.buf_ptr() as *mut u8;
+        let item_count = buffer.item_count();
+        let slice = unsafe { &mut *slice_from_raw_parts_mut(buffer_ptr, item_count) };
+
+        let mut last_version = self.last_version_read.load(Ordering::Relaxed);
+
+        let result = match self.get_memory().read_message(&mut last_version, slice) {
+            ReadingResult::MessageSize(size) => Ok(size),
+            ReadingResult::SameVersion => Ok(0),
+            ReadingResult::Closed => Ok(0),
+            ReadingResult::FailedCreatingLock(e) => Err(e.into()),
+        };
+        
+        self.last_version_read
+            .store(last_version, Ordering::Relaxed);
+        
+        result
+    }
+
+    fn blocking_read(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let mut last_version = self.last_version_read.load(Ordering::Relaxed);
+        let mut buffer = self.buffer.borrow_mut();
+        let buffer_slice = buffer.as_mut_slice();
+        let message = self.get_memory();
+
+        let result = py.allow_threads(|| message.blocking_read(&mut last_version, buffer_slice));
+        let length = match result {
+            ReadingResult::MessageSize(size) => size,
+            ReadingResult::FailedCreatingLock(e) => return Err(PyErr::from(e)),
+            _ => return Ok(None),
+        };
+
+        self.last_version_read
+            .store(last_version, Ordering::Relaxed);
+        Ok(Some(PyBytes::new(py, &buffer[..length]).into_py(py)))
     }
 
     fn name(&self) -> &str {
@@ -204,11 +209,9 @@ impl SharedMemoryReader {
     }
 
     fn check_message_available(&self) -> PyResult<bool> {
-        let shared_memory =
-            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-        let content = shared_memory.lock.read_lock()?;
-
-        Ok(content.version != self.last_version_read.load(Ordering::Relaxed))
+        let last_read_version = self.last_version_read.load(Ordering::Relaxed);
+        let content = self.get_memory().lock.read_lock()?;
+        Ok(content.version != last_read_version)
     }
 
     fn last_read_version(&self) -> usize {
@@ -216,10 +219,7 @@ impl SharedMemoryReader {
     }
 
     fn is_closed(&self) -> PyResult<bool> {
-        let shared_memory =
-            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-        let content = shared_memory.lock.read_lock()?;
-
+        let content = self.get_memory().lock.read_lock()?;
         Ok(content.closed)
     }
 }
@@ -328,15 +328,23 @@ impl SharedMemoryCircularQueue {
     }
 
     fn try_write(&self, data: &[u8]) -> PyResult<bool> {
-        if (data.len() > self.max_element_size) {
-            return Err(PyValueError::new_err(format!("Data size {} exceeds max element size {}", data.len(), self.max_element_size)));
+        if data.len() > self.max_element_size {
+            return Err(PyValueError::new_err(format!(
+                "Data size {} exceeds max element size {}",
+                data.len(),
+                self.max_element_size
+            )));
         }
         Ok(self.get_queue().try_write(data))
     }
 
     fn blocking_write(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
         if data.len() > self.max_element_size {
-            return Err(PyValueError::new_err(format!("Data size {} exceeds max element size {}", data.len(), self.max_element_size)));
+            return Err(PyValueError::new_err(format!(
+                "Data size {} exceeds max element size {}",
+                data.len(),
+                self.max_element_size
+            )));
         }
         let queue = self.get_queue();
 
