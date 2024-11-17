@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::circular_queue::CircularBuffer;
+use crate::circular_queue::CircularQueue;
 use crate::memory_holder::SharedMemoryHolder;
 use crate::shared_memory::{ReadingResult, SharedMemoryMessage};
 use crate::utils::pthread_lock::pthread_lock_initialize_at;
@@ -238,8 +238,8 @@ struct SharedMemoryCircularQueue {
 }
 
 impl SharedMemoryCircularQueue {
-    fn get_queue(&self) -> &CircularBuffer {
-        unsafe { &*(self.shared_memory.slice_ptr() as *const CircularBuffer) }
+    fn get_queue(&self) -> &CircularQueue {
+        unsafe { &*(self.shared_memory.slice_ptr() as *const CircularQueue) }
     }
 }
 
@@ -259,17 +259,16 @@ impl SharedMemoryCircularQueue {
         if max_element_size == 0 || capacity == 0 {
             return Err(PyValueError::new_err("Size cannot be 0"));
         }
-        let buffer_size = (size_of::<circular_queue::ElementSizeType>() + max_element_size) * capacity;
-        let memory_holder =
-            SharedMemoryHolder::create(c_name, CircularBuffer::size_of_fields() + buffer_size)?;
+        let shared_memory =
+            SharedMemoryHolder::create(c_name, CircularQueue::compute_size_for(max_element_size, capacity))?;
 
-        unsafe { pthread_lock_initialize_at(memory_holder.ptr().cast())? };
+        unsafe { pthread_lock_initialize_at(shared_memory.ptr().cast())? };
         
-        let queue = unsafe { &mut *(memory_holder.slice_ptr() as *mut CircularBuffer) };
+        let queue = unsafe { &mut *(shared_memory.slice_ptr() as *mut CircularQueue) };
         queue.init(max_element_size, capacity);
 
         Ok(Self {
-            shared_memory: memory_holder,
+            shared_memory,
             name,
             buffer: RefCell::new(vec![0u8; max_element_size]),
         })
@@ -282,12 +281,12 @@ impl SharedMemoryCircularQueue {
         }
 
         let c_name = CString::new(name.clone())?;
-        let memory_holder = SharedMemoryHolder::open(c_name.as_c_str())?;
+        let shared_memory = SharedMemoryHolder::open(c_name.as_c_str())?;
         
-        let queue = unsafe { &mut *(memory_holder.slice_ptr() as *mut CircularBuffer) };
+        let queue = unsafe { &mut *(shared_memory.slice_ptr() as *mut CircularQueue) };
 
         Ok(Self {
-            shared_memory: memory_holder,
+            shared_memory,
             name,
             buffer: RefCell::new(vec![0u8; queue.max_element_size()]),
         })

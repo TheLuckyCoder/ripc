@@ -5,11 +5,11 @@ use std::mem::size_of;
 use std::time::Duration;
 
 #[repr(C)]
-pub(crate) struct CircularBuffer {
-    content: PThreadLock<CircularBufferContent>,
+pub(crate) struct CircularQueue {
+    content: PThreadLock<CircularQueueContent>,
 }
 
-impl CircularBuffer {
+impl CircularQueue {
     pub(crate) fn init(&self, max_element_size: usize, capacity: usize) {
         let mut content = self.content.lock().unwrap();
 
@@ -88,10 +88,17 @@ impl CircularBuffer {
         let size = content.len() as usize;
         let mut buffer = Vec::with_capacity(content.capacity as usize);
 
-        (0..size).map(|_| {
-            let length = content.read(&mut buffer);
-            buffer[..length].to_vec()
-        }).collect()
+        (0..size)
+            .map(|_| {
+                let length = content.read(&mut buffer);
+                buffer[..length].to_vec()
+            })
+            .collect()
+    }
+
+    pub(crate) fn compute_size_for(max_element_size: usize, capacity: usize) -> usize {
+        CircularQueue::size_of_fields()
+            + (size_of::<ElementSizeType>() + max_element_size) * capacity
     }
 
     pub(crate) const fn size_of_fields() -> usize {
@@ -100,7 +107,7 @@ impl CircularBuffer {
 }
 
 #[repr(C)]
-struct CircularBufferContent {
+struct CircularQueueContent {
     writer_index: u32,
     reader_index: u32,
     max_element_size: u32,
@@ -113,7 +120,7 @@ pub type ElementSizeType = usize;
 
 const ELEMENT_SIZE_TYPE: usize = size_of::<ElementSizeType>();
 
-impl CircularBufferContent {
+impl CircularQueueContent {
     pub(crate) fn len(&self) -> u32 {
         if self.full {
             return self.capacity;
@@ -130,11 +137,13 @@ impl CircularBufferContent {
         self.writer_index = self.next_inc(self.writer_index);
         self.full = self.writer_index == self.reader_index;
 
-        let buffer_index = (self.writer_index * (ELEMENT_SIZE_TYPE as u32 + self.max_element_size)) as usize;
+        let buffer_index =
+            (self.writer_index * (ELEMENT_SIZE_TYPE as u32 + self.max_element_size)) as usize;
         let data_index = buffer_index + ELEMENT_SIZE_TYPE;
         let element_size = value.len();
 
-        self.buffer[buffer_index..data_index].clone_from_slice(&(element_size as ElementSizeType).to_ne_bytes());
+        self.buffer[buffer_index..data_index]
+            .clone_from_slice(&(element_size as ElementSizeType).to_ne_bytes());
 
         self.buffer[data_index..data_index + element_size].clone_from_slice(value);
     }
@@ -143,7 +152,8 @@ impl CircularBufferContent {
         self.reader_index = self.next_inc(self.reader_index);
         self.full = false;
 
-        let buffer_index = (self.reader_index * (ELEMENT_SIZE_TYPE as u32 + self.max_element_size)) as usize;
+        let buffer_index =
+            (self.reader_index * (ELEMENT_SIZE_TYPE as u32 + self.max_element_size)) as usize;
         let data_index = buffer_index + ELEMENT_SIZE_TYPE;
         let element_size = ElementSizeType::from_ne_bytes(
             self.buffer[buffer_index..buffer_index + ELEMENT_SIZE_TYPE]
@@ -151,7 +161,7 @@ impl CircularBufferContent {
                 .unwrap(),
         );
 
-        value.clone_from_slice(&self.buffer[data_index..data_index + element_size]);
+        value[..element_size].clone_from_slice(&self.buffer[data_index..data_index + element_size]);
 
         element_size
     }
@@ -159,5 +169,46 @@ impl CircularBufferContent {
     #[inline]
     fn next_inc(&self, i: u32) -> u32 {
         (i + 1) % self.capacity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::pthread_lock::pthread_lock_initialize_at;
+
+    fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+        unsafe { ::core::slice::from_raw_parts((p as *const T) as *const u8, size_of::<T>()) }
+    }
+
+    #[test]
+    fn read_write() {
+        #[derive(Debug, PartialEq)]
+        struct Data {
+            v1: i32,
+            v2: f64,
+        }
+
+        const ELEMENT_SIZE: usize = size_of::<Data>();
+        let capacity = 5;
+
+        let init_buffer_size = CircularQueue::compute_size_for(ELEMENT_SIZE, capacity);
+        let mut init_vec = vec![0u8; init_buffer_size];
+        let init_buffer = init_vec.as_mut_slice() as *mut [u8];
+
+        unsafe { pthread_lock_initialize_at(init_buffer.cast()).unwrap() };
+
+        let queue = unsafe { &mut *(init_buffer as *mut CircularQueue) };
+        queue.init(ELEMENT_SIZE, capacity);
+
+        let expected_d1 = Data { v1: 1, v2: 2.0 };
+        queue.try_write(any_as_u8_slice(&expected_d1));
+        let d1: Data = {
+            let mut buffer = [0u8; ELEMENT_SIZE];
+            queue.try_read(&mut buffer);
+            unsafe { std::mem::transmute(buffer) }
+        };
+        
+        assert_eq!(expected_d1, d1);
     }
 }
