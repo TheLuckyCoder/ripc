@@ -136,7 +136,7 @@ impl CircularQueueContent {
         self.full = self.writer_index == self.reader_index;
 
         let buffer_index =
-            (self.writer_index * (ELEMENT_SIZE_TYPE as u32 + self.max_element_size)) as usize;
+            self.writer_index as usize * (ELEMENT_SIZE_TYPE + self.max_element_size as usize);
         let data_index = buffer_index + ELEMENT_SIZE_TYPE;
         let element_size = value.len();
 
@@ -147,6 +147,7 @@ impl CircularQueueContent {
     }
 
     pub(crate) fn read(&mut self, value: &mut [u8]) -> usize {
+        assert_eq!(value.len(), self.max_element_size as usize);
         self.reader_index = self.next_inc(self.reader_index);
         self.full = false;
 
