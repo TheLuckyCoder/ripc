@@ -22,7 +22,7 @@ mod utils;
 struct SharedMemoryWriter {
     shared_memory: SharedMemoryHolder,
     name: String,
-    message_length: usize,
+    memory_size: usize,
     last_written_version: AtomicUsize,
 }
 
@@ -35,16 +35,18 @@ impl SharedMemoryWriter {
         }
 
         let c_name = CString::new(name.clone())?;
-        let size = size.get() as usize;
 
         let shared_memory =
-            SharedMemoryHolder::create(c_name, SharedMemoryMessage::size_of_fields() + size)?;
+            SharedMemoryHolder::create(c_name, SharedMemoryMessage::size_of_fields() + size.get() as usize)?;
         unsafe { pthread_rw_lock_initialize_at(shared_memory.ptr().cast())? };
+
+        let memory = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let memory_size = memory.lock.read_lock()?.data.len();
 
         Ok(Self {
             shared_memory,
             name,
-            message_length: size,
+            memory_size,
             last_written_version: AtomicUsize::default(),
         })
     }
@@ -64,12 +66,8 @@ impl SharedMemoryWriter {
         &self.name
     }
 
-    fn total_allocated_size(&self) -> usize {
-        self.shared_memory.memory_size()
-    }
-
-    fn size(&self) -> usize {
-        self.message_length
+    fn memory_size(&self) -> usize {
+        self.memory_size
     }
 
     fn last_written_version(&self) -> usize {
