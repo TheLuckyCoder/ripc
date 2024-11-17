@@ -3,24 +3,15 @@ use libc::pthread_rwlock_t;
 use std::ptr;
 use std::time::Duration;
 
+pub enum ReadingMetadata {
+    NewMessage(usize),
+    SameVersion,
+    Closed,
+}
+
 #[repr(C)]
 pub struct SharedMemoryMessage {
     pub(crate) lock: PThreadRwLock<SharedMemoryMessageContent>,
-}
-
-#[repr(C)]
-pub struct SharedMemoryMessageContent {
-    pub(crate) version: usize,
-    pub(crate) message_size: usize,
-    pub(crate) closed: bool,
-    pub(crate) data: [u8],
-}
-
-pub enum ReadingResult {
-    MessageSize(usize),
-    SameVersion,
-    Closed,
-    FailedCreatingLock(std::io::Error),
 }
 
 impl SharedMemoryMessage {
@@ -56,42 +47,64 @@ impl SharedMemoryMessage {
         &self,
         last_read_version: &mut usize,
         buffer: &mut [u8],
-    ) -> ReadingResult {
-        let content = match self.lock.read_lock() {
-            Ok(content) => content,
-            Err(e) => return ReadingResult::FailedCreatingLock(e),
-        };
+    ) -> std::io::Result<ReadingMetadata> {
+        let content =self.lock.read_lock()?;
 
         if content.closed {
-            return ReadingResult::Closed;
+            return Ok(ReadingMetadata::Closed);
         }
 
         let message_version = content.version;
         if message_version == *last_read_version {
-            return ReadingResult::SameVersion; // There is no new data
+            return Ok(ReadingMetadata::SameVersion);
         }
         let size = content.message_size;
         *last_read_version = message_version;
 
         buffer[..size].copy_from_slice(&content.data[..size]);
 
-        ReadingResult::MessageSize(size)
+        Ok(ReadingMetadata::NewMessage(size))
     }
 
     pub(crate) fn blocking_read(
         &self,
         last_read_version: &mut usize,
         buffer: &mut [u8],
-    ) -> ReadingResult {
+    ) -> std::io::Result<ReadingMetadata> {
         loop {
             let result = self.read_message(last_read_version, buffer);
 
-            if let ReadingResult::SameVersion = result {
+            if let Ok(ReadingMetadata::SameVersion) = result {
                 std::thread::sleep(Duration::from_micros(100));
                 continue;
             }
 
             return result;
         }
+    }
+}
+
+#[repr(C)]
+pub struct SharedMemoryMessageContent {
+    pub(crate) version: usize,
+    pub(crate) message_size: usize,
+    pub(crate) closed: bool,
+    pub(crate) data: [u8],
+}
+
+impl SharedMemoryMessageContent {
+    #[inline]
+    pub(crate) fn get_message_metadata(&mut self, last_read_version: &mut usize) -> ReadingMetadata {
+        if self.closed {
+            return ReadingMetadata::Closed;
+        }
+
+        let message_version = self.version;
+        if message_version == *last_read_version {
+            return ReadingMetadata::SameVersion;
+        }
+        let size = self.message_size;
+
+        ReadingMetadata::NewMessage(size)
     }
 }

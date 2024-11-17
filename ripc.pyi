@@ -49,6 +49,12 @@ class SharedMemoryReader:
         """
         pass
 
+    def try_read_into(self, buffer: Buffer) -> int:
+        """
+        :returns: the number of bytes written into the buffer
+        """
+        pass
+
     def blocking_read(self) -> bytes | None:
         """
         Keeps checking the shared memory until there is a new version to read,
@@ -109,12 +115,6 @@ class SharedMemoryCircularQueue:
         """
         pass
     
-    def try_read_into(self, buffer: Buffer) -> int:
-        """
-        :returns: the number of bytes written into the buffer
-        """
-        pass
-
     def blocking_read(self) -> bytes:
         """
         Blocks the current thread until an element is available

@@ -1,6 +1,6 @@
 use crate::circular_queue::CircularQueue;
 use crate::memory_holder::SharedMemoryHolder;
-use crate::shared_memory::{ReadingResult, SharedMemoryMessage};
+use crate::shared_memory::{ReadingMetadata, SharedMemoryMessage};
 use crate::utils::pthread_lock::pthread_lock_initialize_at;
 use crate::utils::pthread_rw_lock::pthread_rw_lock_initialize_at;
 use pyo3::buffer::PyBuffer;
@@ -157,28 +157,28 @@ impl SharedMemoryReader {
 
     fn try_read_into(&self, buffer_obj: &Bound<'_, PyAny>) -> PyResult<usize> {
         let buffer = PyBuffer::<u8>::get(buffer_obj)?;
-        if !buffer.readonly() || !buffer.is_c_contiguous() {
-            return Err(PyValueError::new_err(
-                "Buffer is not readable or not contiguous",
-            ));
+        if buffer.readonly() {
+            return Err(PyValueError::new_err("Buffer is readonly"));
         }
-        
+        if !buffer.is_c_contiguous() {
+            return Err(PyValueError::new_err("Buffer is not contiguous"));
+        }
+
         let buffer_ptr = buffer.buf_ptr() as *mut u8;
         let item_count = buffer.item_count();
         let slice = unsafe { &mut *slice_from_raw_parts_mut(buffer_ptr, item_count) };
 
         let mut last_version = self.last_version_read.load(Ordering::Relaxed);
 
-        let result = match self.get_memory().read_message(&mut last_version, slice) {
-            ReadingResult::MessageSize(size) => Ok(size),
-            ReadingResult::SameVersion => Ok(0),
-            ReadingResult::Closed => Ok(0),
-            ReadingResult::FailedCreatingLock(e) => Err(e.into()),
+        let result = match self.get_memory().read_message(&mut last_version, slice)? {
+            ReadingMetadata::NewMessage(size) => Ok(size),
+            ReadingMetadata::SameVersion => Ok(0),
+            ReadingMetadata::Closed => Ok(0),
         };
-        
+
         self.last_version_read
             .store(last_version, Ordering::Relaxed);
-        
+
         result
     }
 
@@ -188,10 +188,9 @@ impl SharedMemoryReader {
         let buffer_slice = buffer.as_mut_slice();
         let message = self.get_memory();
 
-        let result = py.allow_threads(|| message.blocking_read(&mut last_version, buffer_slice));
+        let result = py.allow_threads(|| message.blocking_read(&mut last_version, buffer_slice))?;
         let length = match result {
-            ReadingResult::MessageSize(size) => size,
-            ReadingResult::FailedCreatingLock(e) => return Err(PyErr::from(e)),
+            ReadingMetadata::NewMessage(size) => size,
             _ => return Ok(None),
         };
 
