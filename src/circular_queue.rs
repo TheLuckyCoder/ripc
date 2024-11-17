@@ -53,16 +53,14 @@ impl CircularQueue {
         }
     }
 
-    pub(crate) fn try_read(&self, value: &mut [u8]) -> bool {
+    pub(crate) fn try_read(&self, value: &mut [u8]) -> usize {
         let mut content = self.content.lock().unwrap();
 
         if content.len() == 0 {
-            return false;
+            return 0;
         }
 
-        content.read(value);
-
-        true
+        content.read(value)
     }
 
     pub(crate) fn blocking_read(&self, value: &mut [u8]) {
@@ -153,10 +151,10 @@ impl CircularQueueContent {
         self.full = false;
 
         let buffer_index =
-            (self.reader_index * (ELEMENT_SIZE_TYPE as u32 + self.max_element_size)) as usize;
+            self.reader_index as usize * (ELEMENT_SIZE_TYPE + self.max_element_size as usize);
         let data_index = buffer_index + ELEMENT_SIZE_TYPE;
         let element_size = ElementSizeType::from_ne_bytes(
-            self.buffer[buffer_index..buffer_index + ELEMENT_SIZE_TYPE]
+            self.buffer[buffer_index..data_index]
                 .try_into()
                 .unwrap(),
         );
@@ -178,7 +176,7 @@ mod tests {
     use crate::utils::pthread_lock::pthread_lock_initialize_at;
 
     fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-        unsafe { ::core::slice::from_raw_parts((p as *const T) as *const u8, size_of::<T>()) }
+        unsafe { core::slice::from_raw_parts((p as *const T) as *const u8, size_of::<T>()) }
     }
 
     #[test]
@@ -201,14 +199,33 @@ mod tests {
         let queue = unsafe { &mut *(init_buffer as *mut CircularQueue) };
         queue.init(ELEMENT_SIZE, capacity);
 
-        let expected_d1 = Data { v1: 1, v2: 2.0 };
-        queue.try_write(any_as_u8_slice(&expected_d1));
-        let d1: Data = {
+        let write = |data: &Data| {
+            queue.try_write(any_as_u8_slice(data))
+        };
+
+        let read = || {
             let mut buffer = [0u8; ELEMENT_SIZE];
-            queue.try_read(&mut buffer);
+            assert_eq!(queue.try_read(&mut buffer), ELEMENT_SIZE);
             unsafe { std::mem::transmute(buffer) }
         };
+
+        let expected_d1 = Data { v1: 1, v2: 2.0 };
+        write(&expected_d1);
+        assert_eq!(expected_d1, read());
+
+        for i in 0..1000 {
+            let data = Data { v1: i, v2: i as f64 };
+            write(&data);
+            assert_eq!(data, read());
+        }
         
-        assert_eq!(expected_d1, d1);
+        for i in 0..capacity {
+            let data = Data { v1: i as i32, v2: i as f64 };
+            write(&data);
+        }
+        for i in 0..capacity {
+            let data = Data { v1: i as i32, v2: i as f64 };
+            assert_eq!(data, read());
+        }
     }
 }
