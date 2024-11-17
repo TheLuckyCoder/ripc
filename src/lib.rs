@@ -37,11 +37,9 @@ impl SharedMemoryWriter {
 
         let c_name = CString::new(name.clone())?;
         let size = size.get() as usize;
-        
-        let shared_memory = SharedMemoryHolder::create(
-            c_name,
-            SharedMemoryMessage::size_of_fields() + size,
-        )?;
+
+        let shared_memory =
+            SharedMemoryHolder::create(c_name, SharedMemoryMessage::size_of_fields() + size)?;
         unsafe { pthread_rw_lock_initialize_at(shared_memory.ptr().cast())? };
 
         Ok(Self {
@@ -56,11 +54,9 @@ impl SharedMemoryWriter {
         let shared_memory =
             unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
 
-        let version_count = py.allow_threads(|| {
-            shared_memory
-                .write_message(data)
-        })?;
-        self.last_written_version.store(version_count, Ordering::Relaxed);
+        let version_count = py.allow_threads(|| shared_memory.write_message(data))?;
+        self.last_written_version
+            .store(version_count, Ordering::Relaxed);
 
         Ok(())
     }
@@ -114,8 +110,7 @@ struct SharedMemoryReader {
 impl SharedMemoryReader {
     #[new]
     fn new(name: String) -> PyResult<Self> {
-        let c_name = &CString::new(name.clone())?;
-        let shared_memory = SharedMemoryHolder::open(c_name)?;
+        let shared_memory = SharedMemoryHolder::open(CString::new(name.clone())?)?;
 
         // Read the message length
         let message = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
@@ -126,7 +121,7 @@ impl SharedMemoryReader {
             name,
             message_length,
             shared_memory,
-            last_version_read: AtomicUsize::default()
+            last_version_read: AtomicUsize::default(),
         })
     }
 
@@ -164,10 +159,9 @@ impl SharedMemoryReader {
             return Ok(None);
         }
 
-        self.last_version_read.store(last_version, Ordering::Relaxed);
-        Ok(Some(
-            PyBytes::new(py, &buffer[..bytes_read]).into_py(py),
-        ))
+        self.last_version_read
+            .store(last_version, Ordering::Relaxed);
+        Ok(Some(PyBytes::new(py, &buffer[..bytes_read]).into_py(py)))
     }
 
     #[pyo3(signature = (ignore_same_version=true))]
@@ -192,7 +186,8 @@ impl SharedMemoryReader {
             return Ok(None);
         }
 
-        self.last_version_read.store(last_version, Ordering::Relaxed);
+        self.last_version_read
+            .store(last_version, Ordering::Relaxed);
         Ok(Some(
             PyBytes::new(py, &content.data[..bytes_read]).into_py(py),
         ))
@@ -246,11 +241,7 @@ impl SharedMemoryCircularQueue {
 #[pymethods]
 impl SharedMemoryCircularQueue {
     #[staticmethod]
-    fn create(
-        name: String,
-        max_element_size: usize,
-        capacity: usize,
-    ) -> PyResult<Self> {
+    fn create(name: String, max_element_size: usize, capacity: usize) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Topic cannot be empty"));
         }
@@ -259,11 +250,13 @@ impl SharedMemoryCircularQueue {
         if max_element_size == 0 || capacity == 0 {
             return Err(PyValueError::new_err("Size cannot be 0"));
         }
-        let shared_memory =
-            SharedMemoryHolder::create(c_name, CircularQueue::compute_size_for(max_element_size, capacity))?;
+        let shared_memory = SharedMemoryHolder::create(
+            c_name,
+            CircularQueue::compute_size_for(max_element_size, capacity),
+        )?;
 
         unsafe { pthread_lock_initialize_at(shared_memory.ptr().cast())? };
-        
+
         let queue = unsafe { &mut *(shared_memory.slice_ptr() as *mut CircularQueue) };
         queue.init(max_element_size, capacity);
 
@@ -273,16 +266,15 @@ impl SharedMemoryCircularQueue {
             buffer: RefCell::new(vec![0u8; max_element_size]),
         })
     }
-    
+
     #[staticmethod]
     fn open(name: String) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Topic cannot be empty"));
         }
 
-        let c_name = CString::new(name.clone())?;
-        let shared_memory = SharedMemoryHolder::open(c_name.as_c_str())?;
-        
+        let shared_memory = SharedMemoryHolder::open(CString::new(name.clone())?)?;
+
         let queue = unsafe { &mut *(shared_memory.slice_ptr() as *mut CircularQueue) };
 
         Ok(Self {
@@ -326,7 +318,7 @@ impl SharedMemoryCircularQueue {
 
         PyBytes::new(py, buffer).into_py(py)
     }
-    
+
     fn read_all(&self) -> Vec<Vec<u8>> {
         self.get_queue().read_all()
     }
