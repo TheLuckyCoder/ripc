@@ -1,3 +1,6 @@
+from typing_extensions import Buffer
+
+
 class SharedMemoryWriter(object):
     def __init__(self, name: str, size: int):
         """
@@ -103,6 +106,12 @@ class SharedMemoryCircularQueue:
     def try_read(self) -> bytes | None:
         """
         :returns: an element or None, if the queue is empty
+        """
+        pass
+    
+    def try_read_into(self, buffer: Buffer) -> int:
+        """
+        :returns: the number of bytes written into the buffer
         """
         pass
 
