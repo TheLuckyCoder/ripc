@@ -308,8 +308,9 @@ impl SharedMemoryCircularQueue {
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
 
-        if self.get_queue().try_read(buffer) {
-            Some(PyBytes::new(py, buffer).into_py(py))
+        let length = self.get_queue().try_read(buffer);
+        if length != 0 {
+            Some(PyBytes::new(py, &buffer[..length]).into_py(py))
         } else {
             None
         }
