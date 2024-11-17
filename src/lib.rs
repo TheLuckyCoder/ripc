@@ -10,8 +10,8 @@ use pyo3::types::PyBytes;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::num::NonZeroU32;
-use std::ptr::slice_from_raw_parts_mut;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 mod circular_queue;
 mod memory_holder;
@@ -103,7 +103,6 @@ struct SharedMemoryReader {
     name: String,
     message_length: usize,
     last_version_read: AtomicUsize,
-    buffer: RefCell<Vec<u8>>,
 }
 
 impl SharedMemoryReader {
@@ -125,7 +124,6 @@ impl SharedMemoryReader {
         let message_length = message.lock.read_lock()?.data.len();
 
         Ok(Self {
-            buffer: RefCell::new(vec![0u8; shared_memory.memory_size()]),
             name,
             message_length,
             shared_memory,
@@ -137,66 +135,77 @@ impl SharedMemoryReader {
         let mut last_version = self.last_version_read.load(Ordering::Relaxed);
 
         let content = self.get_memory().lock.read_lock()?;
+        let metadata = content.get_message_metadata(&mut last_version);
 
-        let bytes_read = {
-            let message_version = content.version;
-            if message_version == last_version {
-                return Ok(None);
-            } else {
-                last_version = message_version;
-                content.message_size
-            }
-        };
+        if let ReadingMetadata::NewMessage(size) = metadata {
+            self.last_version_read
+                .store(last_version, Ordering::Relaxed);
 
-        self.last_version_read
-            .store(last_version, Ordering::Relaxed);
-        Ok(Some(
-            PyBytes::new(py, &content.data[..bytes_read]).into_py(py),
-        ))
+            return Ok(Some(PyBytes::new(py, &content.data[..size]).into_py(py)));
+        }
+
+        Ok(None)
     }
 
-    fn try_read_into(&self, buffer_obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-        let buffer = PyBuffer::<u8>::get(buffer_obj)?;
+    fn try_read_into(&self, buffer: &Bound<'_, PyAny>) -> PyResult<usize> {
+        let buffer = PyBuffer::<u8>::get(buffer)?;
         if buffer.readonly() {
             return Err(PyValueError::new_err("Buffer is readonly"));
         }
         if !buffer.is_c_contiguous() {
             return Err(PyValueError::new_err("Buffer is not contiguous"));
         }
-
-        let buffer_ptr = buffer.buf_ptr() as *mut u8;
-        let item_count = buffer.item_count();
-        let slice = unsafe { &mut *slice_from_raw_parts_mut(buffer_ptr, item_count) };
+        if buffer.len_bytes() < self.message_length {
+            return Err(PyValueError::new_err("Buffer is too small"));
+        }
 
         let mut last_version = self.last_version_read.load(Ordering::Relaxed);
 
-        let result = match self.get_memory().read_message(&mut last_version, slice)? {
-            ReadingMetadata::NewMessage(size) => Ok(size),
-            ReadingMetadata::SameVersion => Ok(0),
-            ReadingMetadata::Closed => Ok(0),
-        };
+        let content = self.get_memory().lock.read_lock()?;
+        let metadata = content.get_message_metadata(&mut last_version);
 
-        self.last_version_read
-            .store(last_version, Ordering::Relaxed);
+        if let ReadingMetadata::NewMessage(size) = metadata {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    content.data.as_ptr(),
+                    buffer.buf_ptr() as *mut u8,
+                    size,
+                );
+            }
+            drop(content);
 
-        result
+            self.last_version_read
+                .store(last_version, Ordering::Relaxed);
+
+            return Ok(size);
+        }
+
+        Ok(0)
     }
 
     fn blocking_read(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         let mut last_version = self.last_version_read.load(Ordering::Relaxed);
-        let mut buffer = self.buffer.borrow_mut();
-        let buffer_slice = buffer.as_mut_slice();
         let message = self.get_memory();
 
-        let result = py.allow_threads(|| message.blocking_read(&mut last_version, buffer_slice))?;
-        let length = match result {
-            ReadingMetadata::NewMessage(size) => size,
-            _ => return Ok(None),
-        };
+        loop {
+            let content = message.lock.read_lock()?;
+            let metadata = content.get_message_metadata(&mut last_version);
 
-        self.last_version_read
-            .store(last_version, Ordering::Relaxed);
-        Ok(Some(PyBytes::new(py, &buffer[..length]).into_py(py)))
+            match metadata {
+                ReadingMetadata::NewMessage(size) => {
+                    self.last_version_read
+                        .store(last_version, Ordering::Relaxed);
+
+                    return Ok(Some(PyBytes::new(py, &content.data[..size]).into_py(py)));
+                }
+                ReadingMetadata::SameVersion => {
+                    drop(content);
+                    std::thread::sleep(Duration::from_micros(100));
+                    continue;
+                }
+                ReadingMetadata::Closed => return Ok(None),
+            }
+        }
     }
 
     fn name(&self) -> &str {
