@@ -231,6 +231,7 @@ unsafe impl Sync for SharedMemoryReader {}
 struct SharedMemoryCircularQueue {
     shared_memory: SharedMemoryHolder,
     name: String,
+    max_element_size: usize,
     buffer: RefCell<Vec<u8>>,
 }
 
@@ -250,12 +251,8 @@ impl SharedMemoryCircularQueue {
         let max_element_size = max_element_size.get() as usize;
         let capacity = capacity.get() as usize;
 
-        let c_name = CString::new(name.clone())?;
-        if max_element_size == 0 || capacity == 0 {
-            return Err(PyValueError::new_err("Size cannot be 0"));
-        }
         let shared_memory = SharedMemoryHolder::create(
-            c_name,
+            CString::new(name.clone())?,
             CircularQueue::compute_size_for(max_element_size, capacity),
         )?;
 
@@ -267,6 +264,7 @@ impl SharedMemoryCircularQueue {
         Ok(Self {
             shared_memory,
             name,
+            max_element_size,
             buffer: RefCell::new(vec![0u8; max_element_size]),
         })
     }
@@ -280,11 +278,13 @@ impl SharedMemoryCircularQueue {
         let shared_memory = SharedMemoryHolder::open(CString::new(name.clone())?)?;
 
         let queue = unsafe { &mut *(shared_memory.slice_ptr() as *mut CircularQueue) };
+        let max_element_size = queue.max_element_size();
 
         Ok(Self {
             shared_memory,
             name,
-            buffer: RefCell::new(vec![0u8; queue.max_element_size()]),
+            max_element_size,
+            buffer: RefCell::new(vec![0u8; max_element_size]),
         })
     }
 
@@ -317,10 +317,9 @@ impl SharedMemoryCircularQueue {
 
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
+        let length = py.allow_threads(|| queue.blocking_read(buffer));
 
-        py.allow_threads(|| queue.blocking_read(buffer));
-
-        PyBytes::new(py, buffer).into_py(py)
+        PyBytes::new(py, &buffer[..length]).into_py(py)
     }
 
     fn read_all(&self) -> Vec<Vec<u8>> {
@@ -328,14 +327,21 @@ impl SharedMemoryCircularQueue {
         self.get_queue().read_all(borrowed_buffer.as_mut_slice())
     }
 
-    fn try_write(&self, data: &[u8]) -> bool {
-        self.get_queue().try_write(data)
+    fn try_write(&self, data: &[u8]) -> PyResult<bool> {
+        if (data.len() > self.max_element_size) {
+            return Err(PyValueError::new_err(format!("Data size {} exceeds max element size {}", data.len(), self.max_element_size)));
+        }
+        Ok(self.get_queue().try_write(data))
     }
 
-    fn blocking_write(&self, py: Python<'_>, data: &[u8]) {
+    fn blocking_write(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
+        if data.len() > self.max_element_size {
+            return Err(PyValueError::new_err(format!("Data size {} exceeds max element size {}", data.len(), self.max_element_size)));
+        }
         let queue = self.get_queue();
 
         py.allow_threads(|| queue.blocking_write(data));
+        Ok(())
     }
 }
 
