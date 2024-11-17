@@ -31,9 +31,9 @@ struct SharedMemoryWriter {
 impl SharedMemoryWriter {
     #[new]
     fn new(name: String, size: NonZeroU32) -> PyResult<Self> {
-        // if name.is_empty() {
-        //     return Err(PyValueError::new_err("Topic cannot be empty"));
-        // }
+        if name.is_empty() {
+            return Err(PyValueError::new_err("Name cannot be empty"));
+        }
 
         let c_name = CString::new(name.clone())?;
         let size = size.get() as usize;
@@ -110,9 +110,11 @@ struct SharedMemoryReader {
 impl SharedMemoryReader {
     #[new]
     fn new(name: String) -> PyResult<Self> {
+        if name.is_empty() {
+            return Err(PyValueError::new_err("Name cannot be empty"));
+        }
         let shared_memory = SharedMemoryHolder::open(CString::new(name.clone())?)?;
 
-        // Read the message length
         let message = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
         let message_length = message.lock.read_lock()?.data.len();
 
@@ -241,10 +243,12 @@ impl SharedMemoryCircularQueue {
 #[pymethods]
 impl SharedMemoryCircularQueue {
     #[staticmethod]
-    fn create(name: String, max_element_size: usize, capacity: usize) -> PyResult<Self> {
+    fn create(name: String, max_element_size: NonZeroU32, capacity: NonZeroU32) -> PyResult<Self> {
         if name.is_empty() {
-            return Err(PyValueError::new_err("Topic cannot be empty"));
+            return Err(PyValueError::new_err("Name cannot be empty"));
         }
+        let max_element_size = max_element_size.get() as usize;
+        let capacity = capacity.get() as usize;
 
         let c_name = CString::new(name.clone())?;
         if max_element_size == 0 || capacity == 0 {
@@ -320,7 +324,8 @@ impl SharedMemoryCircularQueue {
     }
 
     fn read_all(&self) -> Vec<Vec<u8>> {
-        self.get_queue().read_all()
+        let mut borrowed_buffer = self.buffer.borrow_mut();
+        self.get_queue().read_all(borrowed_buffer.as_mut_slice())
     }
 
     fn try_write(&self, data: &[u8]) -> bool {

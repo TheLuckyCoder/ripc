@@ -131,4 +131,7 @@ class SharedMemoryCircularQueue:
         pass
 
     def read_all(self) -> list[bytes]:
+        """
+        :returns: a list of all the elements in the queue
+        """
         pass

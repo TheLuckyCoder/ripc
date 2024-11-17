@@ -81,14 +81,13 @@ impl CircularQueue {
         content.max_element_size as usize
     }
 
-    pub(crate) fn read_all(&self) -> Vec<Vec<u8>> {
+    pub(crate) fn read_all(&self, buffer: &mut [u8]) -> Vec<Vec<u8>> {
         let mut content = self.content.lock().unwrap();
         let size = content.len() as usize;
-        let mut buffer = Vec::with_capacity(content.capacity as usize);
 
         (0..size)
             .map(|_| {
-                let length = content.read(&mut buffer);
+                let length = content.read(buffer);
                 buffer[..length].to_vec()
             })
             .collect()
