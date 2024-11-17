@@ -3,7 +3,6 @@ use crate::memory_holder::SharedMemoryHolder;
 use crate::shared_memory::{ReadingMetadata, SharedMemoryMessage};
 use crate::utils::pthread_lock::pthread_lock_initialize_at;
 use crate::utils::pthread_rw_lock::pthread_rw_lock_initialize_at;
-use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -101,7 +100,7 @@ impl Drop for SharedMemoryWriter {
 struct SharedMemoryReader {
     shared_memory: SharedMemoryHolder,
     name: String,
-    message_length: usize,
+    memory_size: usize,
     last_version_read: AtomicUsize,
 }
 
@@ -120,12 +119,12 @@ impl SharedMemoryReader {
         }
         let shared_memory = SharedMemoryHolder::open(CString::new(name.clone())?)?;
 
-        let message = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-        let message_length = message.lock.read_lock()?.data.len();
+        let memory = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let memory_size = memory.lock.read_lock()?.data.len();
 
         Ok(Self {
             name,
-            message_length,
+            memory_size,
             shared_memory,
             last_version_read: AtomicUsize::default(),
         })
@@ -145,42 +144,6 @@ impl SharedMemoryReader {
         }
 
         Ok(None)
-    }
-
-    fn try_read_into(&self, buffer: &Bound<'_, PyAny>) -> PyResult<usize> {
-        let buffer = PyBuffer::<u8>::get(buffer)?;
-        if buffer.readonly() {
-            return Err(PyValueError::new_err("Buffer is readonly"));
-        }
-        if !buffer.is_c_contiguous() {
-            return Err(PyValueError::new_err("Buffer is not contiguous"));
-        }
-        if buffer.len_bytes() < self.message_length {
-            return Err(PyValueError::new_err("Buffer is too small"));
-        }
-
-        let mut last_version = self.last_version_read.load(Ordering::Relaxed);
-
-        let content = self.get_memory().lock.read_lock()?;
-        let metadata = content.get_message_metadata(&mut last_version);
-
-        if let ReadingMetadata::NewMessage(size) = metadata {
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    content.data.as_ptr(),
-                    buffer.buf_ptr() as *mut u8,
-                    size,
-                );
-            }
-            drop(content);
-
-            self.last_version_read
-                .store(last_version, Ordering::Relaxed);
-
-            return Ok(size);
-        }
-
-        Ok(0)
     }
 
     fn blocking_read(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
@@ -212,11 +175,11 @@ impl SharedMemoryReader {
         &self.name
     }
 
-    fn size(&self) -> usize {
-        self.message_length
+    fn memory_size(&self) -> usize {
+        self.memory_size
     }
 
-    fn check_message_available(&self) -> PyResult<bool> {
+    fn new_version_available(&self) -> PyResult<bool> {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
         let content = self.get_memory().lock.read_lock()?;
         Ok(content.version != last_read_version)
