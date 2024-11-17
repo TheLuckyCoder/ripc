@@ -1,7 +1,6 @@
 use crate::utils::pthread_rw_lock::PThreadRwLock;
 use libc::pthread_rwlock_t;
 use std::ptr;
-use std::time::Duration;
 
 pub enum ReadingMetadata {
     NewMessage(usize),
@@ -42,46 +41,6 @@ impl SharedMemoryMessage {
         }
         Ok(new_version)
     }
-
-    pub(crate) fn read_message(
-        &self,
-        last_read_version: &mut usize,
-        buffer: &mut [u8],
-    ) -> std::io::Result<ReadingMetadata> {
-        let content =self.lock.read_lock()?;
-
-        if content.closed {
-            return Ok(ReadingMetadata::Closed);
-        }
-
-        let message_version = content.version;
-        if message_version == *last_read_version {
-            return Ok(ReadingMetadata::SameVersion);
-        }
-        let size = content.message_size;
-        *last_read_version = message_version;
-
-        buffer[..size].copy_from_slice(&content.data[..size]);
-
-        Ok(ReadingMetadata::NewMessage(size))
-    }
-
-    pub(crate) fn blocking_read(
-        &self,
-        last_read_version: &mut usize,
-        buffer: &mut [u8],
-    ) -> std::io::Result<ReadingMetadata> {
-        loop {
-            let result = self.read_message(last_read_version, buffer);
-
-            if let Ok(ReadingMetadata::SameVersion) = result {
-                std::thread::sleep(Duration::from_micros(100));
-                continue;
-            }
-
-            return result;
-        }
-    }
 }
 
 #[repr(C)]
@@ -94,7 +53,7 @@ pub struct SharedMemoryMessageContent {
 
 impl SharedMemoryMessageContent {
     #[inline]
-    pub(crate) fn get_message_metadata(&mut self, last_read_version: &mut usize) -> ReadingMetadata {
+    pub(crate) fn get_message_metadata(&self, last_read_version: &mut usize) -> ReadingMetadata {
         if self.closed {
             return ReadingMetadata::Closed;
         }
