@@ -63,7 +63,7 @@ impl CircularQueue {
         content.read(value)
     }
 
-    pub(crate) fn blocking_read(&self, value: &mut [u8]) {
+    pub(crate) fn blocking_read(&self, value: &mut [u8]) -> usize {
         loop {
             let mut content = self.content.lock().unwrap();
             if content.len() == 0 {
@@ -71,8 +71,7 @@ impl CircularQueue {
                 continue;
             }
 
-            content.write(value);
-            break;
+            return content.read(value);
         }
     }
 
