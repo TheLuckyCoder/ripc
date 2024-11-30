@@ -63,6 +63,7 @@ impl SharedMemoryMessageContent {
             return ReadingMetadata::SameVersion;
         }
         let size = self.message_size;
+        *last_read_version = message_version;
 
         ReadingMetadata::NewMessage(size)
     }
