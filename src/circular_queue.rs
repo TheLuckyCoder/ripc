@@ -1,12 +1,11 @@
-use crate::utils::pthread_lock::PThreadLock;
-use libc::pthread_mutex_t;
 use std::cmp::Ordering;
 use std::mem::size_of;
 use std::time::Duration;
+use crate::primitives::mutex::SharedMutex;
 
 #[repr(C)]
 pub(crate) struct CircularQueue {
-    content: PThreadLock<CircularQueueContent>,
+    content: SharedMutex<CircularQueueContent>,
 }
 
 impl CircularQueue {
@@ -98,7 +97,7 @@ impl CircularQueue {
     }
 
     const fn size_of_fields() -> usize {
-        size_of::<pthread_mutex_t>() + size_of::<u32>() * 4 + size_of::<bool>()
+        size_of::<u32>() + size_of::<u32>() * 4 + size_of::<bool>()
     }
 }
 

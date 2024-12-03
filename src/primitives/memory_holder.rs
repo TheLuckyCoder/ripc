@@ -11,6 +11,7 @@ pub struct SharedMemoryHolder {
     _fd: OwnedFd,
     shared_memory_ptr: *mut c_void,
     size: usize,
+    created: bool,
 }
 
 impl SharedMemoryHolder {
@@ -46,6 +47,7 @@ impl SharedMemoryHolder {
                 _fd: shm,
                 shared_memory_ptr: ptr,
                 size,
+                created: true,
             }),
             Err(e) => {
                 let _ = rustix::shm::shm_unlink(name);
@@ -79,19 +81,12 @@ impl SharedMemoryHolder {
             _fd: shm,
             shared_memory_ptr: ptr,
             size,
+            created: false,
         })
-    }
-
-    pub fn ptr(&self) -> *mut c_void {
-        self.shared_memory_ptr
     }
 
     pub fn slice_ptr(&self) -> *mut [u8] {
         slice_from_raw_parts_mut(self.shared_memory_ptr.cast(), self.size)
-    }
-
-    pub fn memory_size(&self) -> usize {
-        self.size
     }
 }
 
@@ -103,8 +98,10 @@ impl Drop for SharedMemoryHolder {
             eprintln!("Failed to unmap shared memory: {}", e);
         }
 
-        if let Err(e) = rustix::shm::shm_unlink(&self.name) {
-            eprintln!("Failed to unlink shared memory: {}", e);
+        if self.created {
+            if let Err(e) = rustix::shm::shm_unlink(&self.name) {
+                eprintln!("Failed to unlink shared memory: {}", e);
+            }
         }
     }
 }

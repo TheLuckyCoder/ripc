@@ -25,7 +25,6 @@ impl SharedFutex {
 
     #[cold]
     fn lock_contended(&self) {
-        // Spin first to speed things up if the lock is released quickly.
         let mut state =  self.0.value.load(Relaxed);
         
         // If it's unlocked now, attempt to take the lock
