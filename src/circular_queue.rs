@@ -171,7 +171,6 @@ impl CircularQueueContent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::pthread_lock::pthread_lock_initialize_at;
 
     fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
         unsafe { core::slice::from_raw_parts((p as *const T) as *const u8, size_of::<T>()) }
@@ -191,8 +190,6 @@ mod tests {
         let init_buffer_size = CircularQueue::compute_size_for(ELEMENT_SIZE, capacity);
         let mut init_vec = vec![0u8; init_buffer_size];
         let init_buffer = init_vec.as_mut_slice() as *mut [u8];
-
-        unsafe { pthread_lock_initialize_at(init_buffer.cast()).unwrap() };
 
         let queue = unsafe { &mut *(init_buffer as *mut CircularQueue) };
         queue.init(ELEMENT_SIZE, capacity);
