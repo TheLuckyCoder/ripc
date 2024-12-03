@@ -1,25 +1,25 @@
-use crate::utils::pthread_rw_lock::PThreadRwLock;
-use libc::pthread_rwlock_t;
 use std::ptr;
+use std::sync::atomic::AtomicBool;
+use crate::primitives::mutex::SharedMutex;
 
 pub enum ReadingMetadata {
     NewMessage(usize),
     SameVersion,
-    Closed,
 }
 
 #[repr(C)]
 pub struct SharedMemoryMessage {
-    pub(crate) lock: PThreadRwLock<SharedMemoryMessageContent>,
+    pub(crate) closed: AtomicBool,
+    pub(crate) data: SharedMutex<SharedMemoryMessageContent>,
 }
 
 impl SharedMemoryMessage {
     pub(crate) const fn size_of_fields() -> usize {
-        size_of::<pthread_rwlock_t>() + size_of::<usize>() * 2 + size_of::<bool>()
+        size_of::<u64>() + size_of::<u32>() + size_of::<usize>() * 2 + size_of::<bool>()
     }
 
     pub(crate) fn write_message(&mut self, data_to_send: &[u8]) -> std::io::Result<usize> {
-        let mut content = self.lock.write_lock()?;
+        let mut content = self.data.lock()?;
 
         if data_to_send.len() > content.data.len() {
             return Err(std::io::Error::other(format!(
@@ -47,17 +47,12 @@ impl SharedMemoryMessage {
 pub struct SharedMemoryMessageContent {
     pub(crate) version: usize,
     pub(crate) message_size: usize,
-    pub(crate) closed: bool,
     pub(crate) data: [u8],
 }
 
 impl SharedMemoryMessageContent {
     #[inline]
     pub(crate) fn get_message_metadata(&self, last_read_version: &mut usize) -> ReadingMetadata {
-        if self.closed {
-            return ReadingMetadata::Closed;
-        }
-
         let message_version = self.version;
         if message_version == *last_read_version {
             return ReadingMetadata::SameVersion;

@@ -1,8 +1,6 @@
 use crate::circular_queue::CircularQueue;
-use primitives::memory_holder::SharedMemoryHolder;
 use crate::shared_memory::{ReadingMetadata, SharedMemoryMessage};
-use crate::utils::pthread_lock::pthread_lock_initialize_at;
-use crate::utils::pthread_rw_lock::pthread_rw_lock_initialize_at;
+use primitives::memory_holder::SharedMemoryHolder;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -13,9 +11,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 mod circular_queue;
+mod primitives;
 mod shared_memory;
 mod utils;
-mod primitives;
 
 #[pyclass]
 #[pyo3(frozen)]
@@ -36,12 +34,13 @@ impl SharedMemoryWriter {
 
         let c_name = CString::new(name.clone())?;
 
-        let shared_memory =
-            SharedMemoryHolder::create(c_name, SharedMemoryMessage::size_of_fields() + size.get() as usize)?;
-        unsafe { pthread_rw_lock_initialize_at(shared_memory.ptr().cast())? };
+        let shared_memory = SharedMemoryHolder::create(
+            c_name,
+            SharedMemoryMessage::size_of_fields() + size.get() as usize,
+        )?;
 
         let memory = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-        let memory_size = memory.lock.read_lock()?.data.len();
+        let memory_size = memory.data.lock()?.data.len();
 
         Ok(Self {
             shared_memory,
@@ -77,9 +76,7 @@ impl SharedMemoryWriter {
     fn close(&self) -> PyResult<()> {
         let shared_memory =
             unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-        let mut content = shared_memory.lock.write_lock()?;
-
-        content.closed = true;
+        shared_memory.closed.store(true, Ordering::Relaxed);
 
         Ok(())
     }
@@ -118,7 +115,7 @@ impl SharedMemoryReader {
         let shared_memory = SharedMemoryHolder::open(CString::new(name.clone())?)?;
 
         let memory = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-        let memory_size = memory.lock.read_lock()?.data.len();
+        let memory_size = memory.data.lock()?.data.len();
 
         Ok(Self {
             name,
@@ -131,7 +128,7 @@ impl SharedMemoryReader {
     fn try_read(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
         let mut last_version = self.last_version_read.load(Ordering::Relaxed);
 
-        let content = self.get_memory().lock.read_lock()?;
+        let content = self.get_memory().data.lock()?;
         let metadata = content.get_message_metadata(&mut last_version);
 
         if let ReadingMetadata::NewMessage(size) = metadata {
@@ -149,7 +146,11 @@ impl SharedMemoryReader {
         let message = self.get_memory();
 
         loop {
-            let content = message.lock.read_lock()?;
+            if message.closed.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+
+            let content = message.data.lock()?;
             let metadata = content.get_message_metadata(&mut last_version);
 
             match metadata {
@@ -164,7 +165,6 @@ impl SharedMemoryReader {
                     std::thread::sleep(Duration::from_micros(100));
                     continue;
                 }
-                ReadingMetadata::Closed => return Ok(None),
             }
         }
     }
@@ -179,7 +179,7 @@ impl SharedMemoryReader {
 
     fn new_version_available(&self) -> PyResult<bool> {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
-        let content = self.get_memory().lock.read_lock()?;
+        let content = self.get_memory().data.lock()?;
         Ok(content.version != last_read_version)
     }
 
@@ -187,9 +187,8 @@ impl SharedMemoryReader {
         self.last_version_read.load(Ordering::Relaxed)
     }
 
-    fn is_closed(&self) -> PyResult<bool> {
-        let content = self.get_memory().lock.read_lock()?;
-        Ok(content.closed)
+    fn is_closed(&self) -> bool {
+        self.get_memory().closed.load(Ordering::Relaxed)
     }
 }
 
@@ -224,8 +223,6 @@ impl SharedMemoryCircularQueue {
             CString::new(name.clone())?,
             CircularQueue::compute_size_for(max_element_size, capacity),
         )?;
-
-        unsafe { pthread_lock_initialize_at(shared_memory.ptr().cast())? };
 
         let queue = unsafe { &mut *(shared_memory.slice_ptr() as *mut CircularQueue) };
         queue.init(max_element_size, capacity);
