@@ -13,7 +13,6 @@ use std::time::Duration;
 mod circular_queue;
 mod primitives;
 mod shared_memory;
-mod utils;
 
 #[pyclass]
 #[pyo3(frozen)]
