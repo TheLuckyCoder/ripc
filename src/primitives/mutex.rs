@@ -13,7 +13,8 @@ impl<T: ?Sized> SharedMutex<T> {
         self.futex.lock();
         Ok(SharedMutexGuard { lock: self })
     }
-    
+
+    #[allow(dead_code)]
     pub fn try_lock(&self) -> Option<SharedMutexGuard<'_, T>> {
         if self.futex.try_lock() {
             Some(SharedMutexGuard { lock: self })

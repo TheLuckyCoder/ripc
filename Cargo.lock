@@ -167,9 +167,8 @@ dependencies = [
 
 [[package]]
 name = "ripc"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
- "libc",
  "linux-futex",
  "pyo3",
  "rustix",
