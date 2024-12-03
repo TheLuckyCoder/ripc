@@ -97,7 +97,7 @@ impl CircularQueue {
             + (size_of::<ElementSizeType>() + max_element_size) * capacity
     }
 
-    pub(crate) const fn size_of_fields() -> usize {
+    const fn size_of_fields() -> usize {
         size_of::<pthread_mutex_t>() + size_of::<u32>() * 4 + size_of::<bool>()
     }
 }
