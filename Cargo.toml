@@ -14,3 +14,4 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.23" }
 libc = "0.2"
 rustix = { version = "0.38", default-features = false, features = ["mm", "fs", "shm", "std", "linux_latest"] }
+linux-futex = "1.0.0"

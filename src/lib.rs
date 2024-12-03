@@ -1,5 +1,5 @@
 use crate::circular_queue::CircularQueue;
-use crate::memory_holder::SharedMemoryHolder;
+use primitives::memory_holder::SharedMemoryHolder;
 use crate::shared_memory::{ReadingMetadata, SharedMemoryMessage};
 use crate::utils::pthread_lock::pthread_lock_initialize_at;
 use crate::utils::pthread_rw_lock::pthread_rw_lock_initialize_at;
@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 mod circular_queue;
-mod memory_holder;
 mod shared_memory;
 mod utils;
+mod primitives;
 
 #[pyclass]
 #[pyo3(frozen)]
