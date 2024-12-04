@@ -1,5 +1,5 @@
 use crate::circular_queue::CircularQueue;
-use crate::shared_memory::{ReadingMetadata, SharedMemoryMessage};
+use crate::shared_memory::SharedMemory;
 use primitives::memory_holder::SharedMemoryHolder;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -8,8 +8,6 @@ use std::cell::RefCell;
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
-use std::time::Duration;
 
 mod circular_queue;
 mod primitives;
@@ -36,10 +34,10 @@ impl SharedMemoryWriter {
 
         let shared_memory = SharedMemoryHolder::create(
             c_name,
-            SharedMemoryMessage::size_of_fields() + size.get() as usize,
+            SharedMemory::size_of_fields() + size.get() as usize,
         )?;
 
-        let memory = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let memory = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemory) };
         let memory_size = memory.data.lock()?.data.len();
 
         Ok(Self {
@@ -52,7 +50,7 @@ impl SharedMemoryWriter {
 
     fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
         let shared_memory =
-            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemory) };
 
         let version_count = py.allow_threads(|| shared_memory.write_message(data))?;
         self.last_written_version
@@ -74,9 +72,11 @@ impl SharedMemoryWriter {
     }
 
     fn close(&self) -> PyResult<()> {
-        let shared_memory =
-            unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
-        shared_memory.closed.store(true, Ordering::Relaxed);
+        let memory = unsafe { &*(self.shared_memory.slice_ptr() as *const SharedMemory) };
+
+        let _ = memory.data.lock()?;
+        memory.closed.store(true, Ordering::Relaxed);
+        memory.condvar.notify_all();
 
         Ok(())
     }
@@ -100,8 +100,8 @@ struct SharedMemoryReader {
 }
 
 impl SharedMemoryReader {
-    fn get_memory(&self) -> &SharedMemoryMessage {
-        unsafe { &*(self.shared_memory.slice_ptr() as *const SharedMemoryMessage) }
+    fn get_memory(&self) -> &SharedMemory {
+        unsafe { &*(self.shared_memory.slice_ptr() as *const SharedMemory) }
     }
 }
 
@@ -114,7 +114,7 @@ impl SharedMemoryReader {
         }
         let shared_memory = SharedMemoryHolder::open(CString::new(name.clone())?)?;
 
-        let memory = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemoryMessage) };
+        let memory = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemory) };
         let memory_size = memory.data.lock()?.data.len();
 
         Ok(Self {
@@ -126,46 +126,48 @@ impl SharedMemoryReader {
     }
 
     fn try_read(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let mut last_version = self.last_version_read.load(Ordering::Relaxed);
+        let last_read_version = self.last_version_read.load(Ordering::Relaxed);
 
-        let content = self.get_memory().data.lock()?;
-        let metadata = content.get_message_metadata(&mut last_version);
+        let memory = self.get_memory();
 
-        if let ReadingMetadata::NewMessage(size) = metadata {
-            self.last_version_read
-                .store(last_version, Ordering::Relaxed);
+        if memory.closed.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
 
-            return Ok(Some(PyBytes::new(py, &content.data[..size]).into_py(py)));
+        let new_version = memory.version.load(Ordering::Relaxed);
+        if new_version != last_read_version {
+            let data_guard = memory.data.lock()?;
+
+            self.last_version_read.store(new_version, Ordering::Relaxed);
+
+            return Ok(Some(
+                PyBytes::new(py, &data_guard.data[..data_guard.message_size]).into_py(py),
+            ));
         }
 
         Ok(None)
     }
 
     fn blocking_read(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let mut last_version = self.last_version_read.load(Ordering::Relaxed);
-        let message = self.get_memory();
+        let last_read_version = self.last_version_read.load(Ordering::Relaxed);
+        let memory = self.get_memory();
 
+        let mut data = memory.data.lock()?;
         loop {
-            if message.closed.load(Ordering::Relaxed) {
+            if memory.closed.load(Ordering::Relaxed) {
                 return Ok(None);
             }
 
-            let content = message.data.lock()?;
-            let metadata = content.get_message_metadata(&mut last_version);
+            if memory.version.load(Ordering::Relaxed) != last_read_version {
+                self.last_version_read
+                    .store(last_read_version, Ordering::Relaxed);
 
-            match metadata {
-                ReadingMetadata::NewMessage(size) => {
-                    self.last_version_read
-                        .store(last_version, Ordering::Relaxed);
-
-                    return Ok(Some(PyBytes::new(py, &content.data[..size]).into_py(py)));
-                }
-                ReadingMetadata::SameVersion => {
-                    drop(content);
-                    std::thread::sleep(Duration::from_micros(100));
-                    continue;
-                }
+                return Ok(Some(
+                    PyBytes::new(py, &data.data[..data.message_size]).into_py(py),
+                ));
             }
+
+            data = memory.condvar.wait(data);
         }
     }
 
@@ -177,10 +179,10 @@ impl SharedMemoryReader {
         self.memory_size
     }
 
-    fn new_version_available(&self) -> PyResult<bool> {
+    fn new_version_available(&self) -> bool {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
-        let content = self.get_memory().data.lock()?;
-        Ok(content.version != last_read_version)
+        let version = self.get_memory().version.load(Ordering::Relaxed);
+        version != last_read_version
     }
 
     fn last_read_version(&self) -> usize {

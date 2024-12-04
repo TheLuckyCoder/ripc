@@ -1,23 +1,19 @@
-use std::ptr;
-use std::sync::atomic::AtomicBool;
 use crate::primitives::condvar::SharedCondvar;
 use crate::primitives::mutex::SharedMutex;
-
-pub enum ReadingMetadata {
-    NewMessage(usize),
-    SameVersion,
-}
+use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[repr(C)]
-pub struct SharedMemoryMessage {
+pub struct SharedMemory {
     pub closed: AtomicBool,
     pub condvar: SharedCondvar,
-    pub data: SharedMutex<SharedMemoryMessageContent>,
+    pub version: AtomicUsize,
+    pub data: SharedMutex<SharedMemoryData>,
 }
 
-impl SharedMemoryMessage {
+impl SharedMemory {
     pub(crate) const fn size_of_fields() -> usize {
-        size_of::<u64>() + size_of::<u64>() + size_of::<u32>() + size_of::<usize>() * 2 + size_of::<bool>()
+        size_of::<usize>() * 4
     }
 
     pub(crate) fn write_message(&mut self, data_to_send: &[u8]) -> std::io::Result<usize> {
@@ -31,8 +27,7 @@ impl SharedMemoryMessage {
             )));
         }
 
-        let new_version = content.version.wrapping_add(1);
-        content.version = new_version;
+        let new_version = self.version.fetch_add(1, Ordering::Relaxed);
         content.message_size = data_to_send.len();
         unsafe {
             ptr::copy_nonoverlapping(
@@ -41,27 +36,14 @@ impl SharedMemoryMessage {
                 data_to_send.len(),
             );
         }
+        self.condvar.notify_all();
+        
         Ok(new_version)
     }
 }
 
 #[repr(C)]
-pub struct SharedMemoryMessageContent {
-    pub(crate) version: usize,
+pub struct SharedMemoryData {
     pub(crate) message_size: usize,
     pub(crate) data: [u8],
-}
-
-impl SharedMemoryMessageContent {
-    #[inline]
-    pub(crate) fn get_message_metadata(&self, last_read_version: &mut usize) -> ReadingMetadata {
-        let message_version = self.version;
-        if message_version == *last_read_version {
-            return ReadingMetadata::SameVersion;
-        }
-        let size = self.message_size;
-        *last_read_version = message_version;
-
-        ReadingMetadata::NewMessage(size)
-    }
 }

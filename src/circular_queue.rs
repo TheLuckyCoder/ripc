@@ -97,7 +97,7 @@ impl CircularQueue {
     }
 
     const fn size_of_fields() -> usize {
-        size_of::<u32>() + size_of::<u32>() * 4 + size_of::<bool>()
+        size_of::<u64>() + size_of::<u32>() * 4 + size_of::<u64>()
     }
 }
 
