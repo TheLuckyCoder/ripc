@@ -1,5 +1,6 @@
 use std::ptr;
 use std::sync::atomic::AtomicBool;
+use crate::primitives::condvar::SharedCondvar;
 use crate::primitives::mutex::SharedMutex;
 
 pub enum ReadingMetadata {
@@ -9,13 +10,14 @@ pub enum ReadingMetadata {
 
 #[repr(C)]
 pub struct SharedMemoryMessage {
-    pub(crate) closed: AtomicBool,
-    pub(crate) data: SharedMutex<SharedMemoryMessageContent>,
+    pub closed: AtomicBool,
+    pub condvar: SharedCondvar,
+    pub data: SharedMutex<SharedMemoryMessageContent>,
 }
 
 impl SharedMemoryMessage {
     pub(crate) const fn size_of_fields() -> usize {
-        size_of::<u64>() + size_of::<u32>() + size_of::<usize>() * 2 + size_of::<bool>()
+        size_of::<u64>() + size_of::<u64>() + size_of::<u32>() + size_of::<usize>() * 2 + size_of::<bool>()
     }
 
     pub(crate) fn write_message(&mut self, data_to_send: &[u8]) -> std::io::Result<usize> {

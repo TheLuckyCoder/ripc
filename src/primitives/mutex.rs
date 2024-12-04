@@ -53,3 +53,7 @@ impl<T: ?Sized> Drop for SharedMutexGuard<'_, T> {
 
 unsafe impl<T: ?Sized> Send for SharedMutexGuard<'_, T> where T: Send {}
 unsafe impl<T: ?Sized> Sync for SharedMutexGuard<'_, T> where T: Send + Sync {}
+
+pub(crate) fn guard_lock<'a, T: ?Sized>(guard: &SharedMutexGuard<'a, T>) -> &'a SharedFutex {
+    &guard.lock.futex
+}
