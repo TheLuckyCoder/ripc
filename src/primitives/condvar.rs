@@ -9,7 +9,7 @@ pub struct SharedCondvar {
 }
 
 impl SharedCondvar {
-    pub fn wait<'a, T>(&self, guard: SharedMutexGuard<'a, T>) -> SharedMutexGuard<'a, T> {
+    pub fn wait<'a, T: ?Sized>(&self, guard: SharedMutexGuard<'a, T>) -> SharedMutexGuard<'a, T> {
         let lock = guard_lock(&guard);
         unsafe {
             self.futex_wait(lock);
@@ -17,7 +17,7 @@ impl SharedCondvar {
         guard
     }
 
-    pub fn wait_while<'a, T, F>(
+    pub fn wait_while<'a, T: ?Sized, F>(
         &self,
         mut guard: SharedMutexGuard<'a, T>,
         mut condition: F,

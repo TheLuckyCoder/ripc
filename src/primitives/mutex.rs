@@ -24,8 +24,8 @@ impl<T: ?Sized> SharedMutex<T> {
     }
 }
 
-unsafe impl<T: ?Sized> Send for SharedMutex<T> where T: Send {}
-unsafe impl<T: ?Sized> Sync for SharedMutex<T> where T: Send {}
+unsafe impl<T: ?Sized + Send> Send for SharedMutex<T> {}
+unsafe impl<T: ?Sized + Send> Sync for SharedMutex<T> {}
 
 pub struct SharedMutexGuard<'a, T: ?Sized> {
     lock: &'a SharedMutex<T>,
@@ -51,8 +51,8 @@ impl<T: ?Sized> Drop for SharedMutexGuard<'_, T> {
     }
 }
 
-unsafe impl<T: ?Sized> Send for SharedMutexGuard<'_, T> where T: Send {}
-unsafe impl<T: ?Sized> Sync for SharedMutexGuard<'_, T> where T: Send + Sync {}
+unsafe impl<T: ?Sized + Send> Send for SharedMutexGuard<'_, T> {}
+unsafe impl<T: ?Sized + Send + Sync> Sync for SharedMutexGuard<'_, T> {}
 
 pub(crate) fn guard_lock<'a, T: ?Sized>(guard: &SharedMutexGuard<'a, T>) -> &'a SharedFutex {
     &guard.lock.futex
