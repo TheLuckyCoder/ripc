@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 mod circular_queue;

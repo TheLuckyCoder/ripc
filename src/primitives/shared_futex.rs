@@ -1,10 +1,10 @@
-use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use linux_futex::{Futex, Shared};
+use std::hint::spin_loop;
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 const UNLOCKED: u32 = 0;
 const LOCKED: u32 = 1; // locked, no other threads waiting
 const CONTENDED: u32 = 2; // locked, and other threads waiting (contended)
-
 
 #[repr(transparent)]
 pub struct SharedFutex(Futex<Shared>);
@@ -13,24 +13,36 @@ pub struct SharedFutex(Futex<Shared>);
 impl SharedFutex {
     #[inline]
     pub fn try_lock(&self) -> bool {
-        self.0.value.compare_exchange(UNLOCKED, LOCKED, Acquire, Relaxed).is_ok()
+        self.0
+            .value
+            .compare_exchange(UNLOCKED, LOCKED, Acquire, Relaxed)
+            .is_ok()
     }
 
     #[inline]
     pub fn lock(&self) {
-        if self.0.value.compare_exchange(UNLOCKED, LOCKED, Acquire, Relaxed).is_err() {
+        if self
+            .0
+            .value
+            .compare_exchange(UNLOCKED, LOCKED, Acquire, Relaxed)
+            .is_err()
+        {
             self.lock_contended();
         }
     }
 
     #[cold]
     fn lock_contended(&self) {
-        let mut state =  self.0.value.load(Relaxed);
-        
+        let mut state = self.spin();
+
         // If it's unlocked now, attempt to take the lock
         // without marking it as contended.
         if state == UNLOCKED {
-            match self.0.value.compare_exchange(UNLOCKED, LOCKED, Acquire, Relaxed) {
+            match self
+                .0
+                .value
+                .compare_exchange(UNLOCKED, LOCKED, Acquire, Relaxed)
+            {
                 Ok(_) => return, // Locked!
                 Err(s) => state = s,
             }
@@ -49,7 +61,7 @@ impl SharedFutex {
             let _ = self.0.wait(CONTENDED);
 
             // Get the new state
-            state = self.0.value.load(Relaxed);
+            state = self.spin();
         }
     }
 
@@ -61,6 +73,24 @@ impl SharedFutex {
             // which makes sure that any other waiting threads will also be
             // woken up eventually.
             let _ = self.0.wake(1);
+        }
+    }
+
+    fn spin(&self) -> u32 {
+        let mut spin = 100;
+        loop {
+            // We only use `load` (and not `swap` or `compare_exchange`)
+            // while spinning, to be easier on the caches.
+            let state = self.0.value.load(Relaxed);
+
+            // We stop spinning when the mutex is UNLOCKED,
+            // but also when it's CONTENDED.
+            if state != LOCKED || spin == 0 {
+                return state;
+            }
+
+            spin_loop();
+            spin -= 1;
         }
     }
 }
