@@ -3,6 +3,7 @@ use crate::primitives::shared_futex::SharedFutex;
 use linux_futex::{Futex, Shared};
 use std::sync::atomic::Ordering::Relaxed;
 
+#[derive(Default)]
 #[repr(transparent)]
 pub struct SharedCondvar {
     futex: Futex<Shared>,

@@ -6,6 +6,7 @@ const UNLOCKED: u32 = 0;
 const LOCKED: u32 = 1; // locked, no other threads waiting
 const CONTENDED: u32 = 2; // locked, and other threads waiting (contended)
 
+#[derive(Default)]
 #[repr(transparent)]
 pub struct SharedFutex(Futex<Shared>);
 
