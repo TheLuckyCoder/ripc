@@ -2,16 +2,17 @@ use crate::primitives::shared_futex::SharedFutex;
 use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
 
+#[derive(Default)]
 #[repr(C)]
 pub struct SharedMutex<T: ?Sized> {
-    pub futex: SharedFutex,
+    pub(crate) futex: SharedFutex,
     data: UnsafeCell<T>,
 }
 
 impl<T: ?Sized> SharedMutex<T> {
-    pub fn lock(&self) -> std::io::Result<SharedMutexGuard<'_, T>> {
+    pub fn lock(&self) -> SharedMutexGuard<'_, T> {
         self.futex.lock();
-        Ok(SharedMutexGuard { lock: self })
+        SharedMutexGuard { lock: self }
     }
 
     #[allow(dead_code)]

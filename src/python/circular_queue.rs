@@ -8,7 +8,7 @@ use crate::circular_queue::CircularQueue;
 use crate::primitives::memory_holder::SharedMemoryHolder;
 
 #[pyclass]
-#[pyo3(frozen)]
+#[pyo3(frozen, name = "SharedMemoryCircularQueue")]
 pub struct SharedCircularQueue {
     shared_memory: SharedMemoryHolder,
     name: String,
@@ -16,10 +16,8 @@ pub struct SharedCircularQueue {
     buffer: RefCell<Vec<u8>>,
 }
 
-impl SharedCircularQueue {
-    fn get_queue(&self) -> &CircularQueue {
-        unsafe { &*(self.shared_memory.slice_ptr() as *const CircularQueue) }
-    }
+fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
+    unsafe { &*(memory_holder.slice_ptr() as *const CircularQueue) }
 }
 
 #[pymethods]
@@ -37,8 +35,7 @@ impl SharedCircularQueue {
             CircularQueue::compute_size_for(max_element_size, capacity),
         )?;
 
-        let queue = unsafe { &mut *(shared_memory.slice_ptr() as *mut CircularQueue) };
-        queue.init(max_element_size, capacity);
+        deref_queue(&shared_memory).init(max_element_size, capacity);
 
         Ok(Self {
             shared_memory,
@@ -68,11 +65,11 @@ impl SharedCircularQueue {
     }
 
     fn __len__(&self) -> usize {
-        self.get_queue().len()
+        deref_queue(&self.shared_memory).len()
     }
 
     fn is_full(&self) -> bool {
-        self.get_queue().is_full()
+        deref_queue(&self.shared_memory).is_full()
     }
 
     fn name(&self) -> &str {
@@ -83,7 +80,7 @@ impl SharedCircularQueue {
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
 
-        let length = self.get_queue().try_read(buffer);
+        let length = deref_queue(&self.shared_memory).try_read(buffer);
         if length != 0 {
             Some(PyBytes::new(py, &buffer[..length]))
         } else {
@@ -92,7 +89,7 @@ impl SharedCircularQueue {
     }
 
     fn blocking_read<'p>(&self, py: Python<'p>) -> Bound<'p, PyBytes> {
-        let queue = self.get_queue();
+        let queue = deref_queue(&self.shared_memory);
 
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
@@ -103,7 +100,7 @@ impl SharedCircularQueue {
 
     fn read_all(&self) -> Vec<Vec<u8>> {
         let mut borrowed_buffer = self.buffer.borrow_mut();
-        self.get_queue().read_all(borrowed_buffer.as_mut_slice())
+        deref_queue(&self.shared_memory).read_all(borrowed_buffer.as_mut_slice())
     }
 
     fn try_write(&self, data: &[u8]) -> PyResult<bool> {
@@ -114,7 +111,7 @@ impl SharedCircularQueue {
                 self.max_element_size
             )));
         }
-        Ok(self.get_queue().try_write(data))
+        Ok(deref_queue(&self.shared_memory).try_write(data))
     }
 
     fn blocking_write(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
@@ -125,7 +122,7 @@ impl SharedCircularQueue {
                 self.max_element_size
             )));
         }
-        let queue = self.get_queue();
+        let queue = deref_queue(&self.shared_memory);
 
         py.allow_threads(|| queue.blocking_write(data));
         Ok(())

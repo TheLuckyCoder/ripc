@@ -4,21 +4,15 @@ use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
 use pyo3::exceptions::PyValueError;
 use pyo3::types::PyBytes;
 use crate::primitives::memory_holder::SharedMemoryHolder;
-use crate::shared_memory::SharedMemory;
+use crate::python::writer::deref_shared_memory;
 
 #[pyclass]
-#[pyo3(frozen)]
+#[pyo3(frozen, name = "SharedMemoryReader")]
 pub struct SharedReader {
     shared_memory: SharedMemoryHolder,
     name: String,
     memory_size: usize,
     last_version_read: AtomicUsize,
-}
-
-impl SharedReader {
-    fn get_memory(&self) -> &SharedMemory {
-        unsafe { &*(self.shared_memory.slice_ptr() as *const SharedMemory) }
-    }
 }
 
 #[pymethods]
@@ -30,8 +24,8 @@ impl SharedReader {
         }
         let shared_memory = SharedMemoryHolder::open(CString::new(name.clone())?)?;
 
-        let memory = unsafe { &*(shared_memory.slice_ptr() as *mut SharedMemory) };
-        let memory_size = memory.data.lock()?.bytes.len();
+        let memory = deref_shared_memory(&shared_memory);
+        let memory_size = memory.data.lock().bytes.len();
 
         Ok(Self {
             name,
@@ -44,7 +38,7 @@ impl SharedReader {
     fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
 
-        let memory = self.get_memory();
+        let memory = deref_shared_memory(&self.shared_memory);
 
         if memory.closed.load(Ordering::Relaxed) {
             return None;
@@ -52,7 +46,7 @@ impl SharedReader {
 
         let new_version = memory.version.load(Ordering::Relaxed);
         if new_version != last_read_version {
-            let data_guard = memory.data.lock().unwrap();
+            let data_guard = memory.data.lock();
 
             self.last_version_read.store(new_version, Ordering::Relaxed);
 
@@ -67,9 +61,9 @@ impl SharedReader {
 
     fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
-        let memory = self.get_memory();
+        let memory = deref_shared_memory(&self.shared_memory);
 
-        let mut data = memory.data.lock().unwrap();
+        let mut data = memory.data.lock();
         loop {
             if memory.closed.load(Ordering::Relaxed) {
                 return None;
@@ -96,7 +90,7 @@ impl SharedReader {
 
     fn new_version_available(&self) -> bool {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
-        let version = self.get_memory().version.load(Ordering::Relaxed);
+        let version = deref_shared_memory(&self.shared_memory).version.load(Ordering::Relaxed);
         version != last_read_version
     }
 
@@ -105,7 +99,7 @@ impl SharedReader {
     }
 
     fn is_closed(&self) -> bool {
-        self.get_memory().closed.load(Ordering::Relaxed)
+         deref_shared_memory(&self.shared_memory).closed.load(Ordering::Relaxed)
     }
 }
 

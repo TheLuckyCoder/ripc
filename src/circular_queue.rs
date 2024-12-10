@@ -10,26 +10,26 @@ pub(crate) struct CircularQueue {
 
 impl CircularQueue {
     pub(crate) fn init(&self, max_element_size: usize, capacity: usize) {
-        let mut content = self.content.lock().unwrap();
+        let mut content = self.content.lock();
 
         content.max_element_size = max_element_size as u32;
         content.capacity = capacity as u32;
     }
 
     pub(crate) fn len(&self) -> usize {
-        let content = self.content.lock().unwrap();
+        let content = self.content.lock();
 
         content.len() as usize
     }
 
     pub(crate) fn is_full(&self) -> bool {
-        let content = self.content.lock().unwrap();
+        let content = self.content.lock();
 
         content.full
     }
 
     pub(crate) fn try_write(&self, value: &[u8]) -> bool {
-        let mut content = self.content.lock().unwrap();
+        let mut content = self.content.lock();
         if content.full {
             return false;
         }
@@ -41,7 +41,7 @@ impl CircularQueue {
 
     pub(crate) fn blocking_write(&self, value: &[u8]) {
         loop {
-            let mut content = self.content.lock().unwrap();
+            let mut content = self.content.lock();
             if content.full {
                 std::thread::sleep(Duration::from_micros(100));
                 continue;
@@ -53,7 +53,7 @@ impl CircularQueue {
     }
 
     pub(crate) fn try_read(&self, value: &mut [u8]) -> usize {
-        let mut content = self.content.lock().unwrap();
+        let mut content = self.content.lock();
 
         if content.len() == 0 {
             return 0;
@@ -64,7 +64,7 @@ impl CircularQueue {
 
     pub(crate) fn blocking_read(&self, value: &mut [u8]) -> usize {
         loop {
-            let mut content = self.content.lock().unwrap();
+            let mut content = self.content.lock();
             if content.len() == 0 {
                 std::thread::sleep(Duration::from_micros(100));
                 continue;
@@ -75,12 +75,12 @@ impl CircularQueue {
     }
 
     pub(crate) fn max_element_size(&self) -> usize {
-        let content = self.content.lock().unwrap();
+        let content = self.content.lock();
         content.max_element_size as usize
     }
 
     pub(crate) fn read_all(&self, buffer: &mut [u8]) -> Vec<Vec<u8>> {
-        let mut content = self.content.lock().unwrap();
+        let mut content = self.content.lock();
         let size = content.len() as usize;
 
         (0..size)
