@@ -1,10 +1,10 @@
-use std::ffi::CString;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
-use pyo3::exceptions::PyValueError;
-use pyo3::types::PyBytes;
 use crate::primitives::memory_holder::SharedMemoryHolder;
 use crate::python::writer::deref_shared_memory;
+use pyo3::exceptions::PyValueError;
+use pyo3::types::PyBytes;
+use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
+use std::ffi::CString;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[pyclass]
 #[pyo3(frozen, name = "SharedMemoryReader")]
@@ -50,10 +50,7 @@ impl SharedReader {
 
             self.last_version_read.store(new_version, Ordering::Relaxed);
 
-            return Some(PyBytes::new(
-                py,
-                &data_guard.bytes[..data_guard.size],
-            ));
+            return Some(PyBytes::new(py, &data_guard.bytes[..data_guard.size]));
         }
 
         None
@@ -69,9 +66,9 @@ impl SharedReader {
                 return None;
             }
 
-            if memory.version.load(Ordering::Relaxed) != last_read_version {
-                self.last_version_read
-                    .store(last_read_version, Ordering::Relaxed);
+            let new_version = memory.version.load(Ordering::Relaxed);
+            if new_version != last_read_version {
+                self.last_version_read.store(new_version, Ordering::Relaxed);
 
                 return Some(PyBytes::new(py, &data.bytes[..data.size]));
             }
@@ -90,7 +87,9 @@ impl SharedReader {
 
     fn new_version_available(&self) -> bool {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
-        let version = deref_shared_memory(&self.shared_memory).version.load(Ordering::Relaxed);
+        let version = deref_shared_memory(&self.shared_memory)
+            .version
+            .load(Ordering::Relaxed);
         version != last_read_version
     }
 
@@ -99,7 +98,9 @@ impl SharedReader {
     }
 
     fn is_closed(&self) -> bool {
-         deref_shared_memory(&self.shared_memory).closed.load(Ordering::Relaxed)
+        deref_shared_memory(&self.shared_memory)
+            .closed
+            .load(Ordering::Relaxed)
     }
 }
 
