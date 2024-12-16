@@ -22,7 +22,7 @@ pub(crate) fn deref_shared_memory(shared_memory: &SharedMemoryHolder) -> &Shared
 #[pymethods]
 impl SharedWriter {
     #[new]
-    fn new(name: String, size: NonZeroU32) -> PyResult<Self> {
+    pub fn new(name: String, size: NonZeroU32) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Name cannot be empty"));
         }
@@ -45,8 +45,8 @@ impl SharedWriter {
         })
     }
 
-    fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
-        let shared_memory = unsafe { &mut *(self.shared_memory.slice_ptr() as *mut SharedMemory) };
+    pub fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
+        let shared_memory = deref_shared_memory(&self.shared_memory);
 
         if data.len() > self.memory_size {
             return Err(PyValueError::new_err(format!(
@@ -63,19 +63,19 @@ impl SharedWriter {
         Ok(())
     }
 
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 
-    fn memory_size(&self) -> usize {
+    pub fn memory_size(&self) -> usize {
         self.memory_size
     }
 
-    fn last_written_version(&self) -> usize {
+    pub fn last_written_version(&self) -> usize {
         self.last_written_version.load(Ordering::Relaxed)
     }
 
-    fn close(&self) -> PyResult<()> {
+    pub fn close(&self) -> PyResult<()> {
         let memory = deref_shared_memory(&self.shared_memory);
 
         let _ = memory.data.lock();

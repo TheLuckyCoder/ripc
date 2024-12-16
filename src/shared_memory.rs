@@ -19,13 +19,13 @@ impl SharedMemory {
         let mut content = self.data.lock();
         let data_len = data_to_send.len();
 
-        let new_version = self.version.fetch_add(1, Ordering::Relaxed);
+        let old_version = self.version.fetch_add(1, Ordering::Relaxed);
         content.size = data_len;
         content.bytes[..data_len].copy_from_slice(data_to_send);
 
         self.condvar.notify_all();
 
-        new_version
+        old_version + 1
     }
 }
 

@@ -18,7 +18,7 @@ pub struct SharedReader {
 #[pymethods]
 impl SharedReader {
     #[new]
-    fn new(name: String) -> PyResult<Self> {
+    pub fn new(name: String) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Name cannot be empty"));
         }
@@ -35,7 +35,7 @@ impl SharedReader {
         })
     }
 
-    fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
+    pub fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
 
         let memory = deref_shared_memory(&self.shared_memory);
@@ -56,7 +56,7 @@ impl SharedReader {
         None
     }
 
-    fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
+    pub fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
         let memory = deref_shared_memory(&self.shared_memory);
 
@@ -77,15 +77,15 @@ impl SharedReader {
         }
     }
 
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 
-    fn memory_size(&self) -> usize {
+    pub fn memory_size(&self) -> usize {
         self.memory_size
     }
 
-    fn new_version_available(&self) -> bool {
+    pub fn new_version_available(&self) -> bool {
         let last_read_version = self.last_version_read.load(Ordering::Relaxed);
         let version = deref_shared_memory(&self.shared_memory)
             .version
@@ -93,11 +93,11 @@ impl SharedReader {
         version != last_read_version
     }
 
-    fn last_read_version(&self) -> usize {
+    pub fn last_read_version(&self) -> usize {
         self.last_version_read.load(Ordering::Relaxed)
     }
 
-    fn is_closed(&self) -> bool {
+    pub fn is_closed(&self) -> bool {
         deref_shared_memory(&self.shared_memory)
             .closed
             .load(Ordering::Relaxed)

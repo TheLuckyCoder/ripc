@@ -1,4 +1,4 @@
-use std::ffi::{c_void, CString};
+use std::ffi::{CString};
 use std::os::fd::OwnedFd;
 use std::ptr::slice_from_raw_parts_mut;
 
@@ -9,8 +9,7 @@ use rustix::shm::ShmOFlags;
 pub struct SharedMemoryHolder {
     name: CString,
     _fd: OwnedFd,
-    shared_memory_ptr: *mut c_void,
-    size: usize,
+    memory: *mut [u8],
     created: bool,
 }
 
@@ -42,13 +41,19 @@ impl SharedMemoryHolder {
         };
 
         match mmap_result {
-            Ok(ptr) => Ok(Self {
-                name,
-                _fd: shm,
-                shared_memory_ptr: ptr,
-                size,
-                created: true,
-            }),
+            Ok(ptr) => {
+                let memory = slice_from_raw_parts_mut(ptr.cast(), size);
+                unsafe {
+                    (*memory).fill(0);
+                }
+                
+                Ok(Self {
+                    name,
+                    _fd: shm,
+                    memory,
+                    created: true,
+                })
+            }
             Err(e) => {
                 let _ = rustix::shm::shm_unlink(name);
                 Err(e.into())
@@ -79,14 +84,13 @@ impl SharedMemoryHolder {
         Ok(Self {
             name,
             _fd: shm,
-            shared_memory_ptr: ptr,
-            size,
+            memory: slice_from_raw_parts_mut(ptr.cast(), size),
             created: false,
         })
     }
 
     pub fn slice_ptr(&self) -> *mut [u8] {
-        slice_from_raw_parts_mut(self.shared_memory_ptr.cast(), self.size)
+        self.memory
     }
 }
 
@@ -94,7 +98,7 @@ unsafe impl Send for SharedMemoryHolder {}
 
 impl Drop for SharedMemoryHolder {
     fn drop(&mut self) {
-        if let Err(e) = unsafe { rustix::mm::munmap(self.shared_memory_ptr.cast(), self.size) } {
+        if let Err(e) = unsafe { rustix::mm::munmap(self.memory.cast(), self.memory.len()) } {
             eprintln!("Failed to unmap shared memory: {}", e);
         }
 
