@@ -1,10 +1,12 @@
+use crate::primitives::condvar::SharedCondvar;
+use crate::primitives::mutex::SharedMutex;
 use std::cmp::Ordering;
 use std::mem::size_of;
-use std::time::Duration;
-use crate::primitives::mutex::SharedMutex;
 
 #[repr(C)]
 pub(crate) struct CircularQueue {
+    wait_for_read: SharedCondvar,
+    wait_for_write: SharedCondvar,
     content: SharedMutex<CircularQueueContent>,
 }
 
@@ -35,21 +37,19 @@ impl CircularQueue {
         }
 
         content.write(value);
+        self.wait_for_write.notify_one();
 
         true
     }
 
     pub(crate) fn blocking_write(&self, value: &[u8]) {
-        loop {
-            let mut content = self.content.lock();
-            if content.full {
-                std::thread::sleep(Duration::from_micros(100));
-                continue;
-            }
-
-            content.write(value);
-            break;
+        let mut content = self.content.lock();
+        if content.full {
+            content = self.wait_for_read.wait_while(content, |guard| guard.full);
         }
+
+        content.write(value);
+        self.wait_for_write.notify_one();
     }
 
     pub(crate) fn try_read(&self, value: &mut [u8]) -> usize {
@@ -59,19 +59,22 @@ impl CircularQueue {
             return 0;
         }
 
-        content.read(value)
+        let size = content.read(value);
+        self.wait_for_read.notify_one();
+        size
     }
 
     pub(crate) fn blocking_read(&self, value: &mut [u8]) -> usize {
-        loop {
-            let mut content = self.content.lock();
-            if content.len() == 0 {
-                std::thread::sleep(Duration::from_micros(100));
-                continue;
-            }
-
-            return content.read(value);
+        let mut content = self.content.lock();
+        if content.len() == 0 {
+            content = self
+                .wait_for_write
+                .wait_while(content, |guard| guard.len() == 0);
         }
+
+        let size = content.read(value);
+        self.wait_for_read.notify_one();
+        size
     }
 
     pub(crate) fn max_element_size(&self) -> usize {
@@ -83,12 +86,15 @@ impl CircularQueue {
         let mut content = self.content.lock();
         let size = content.len() as usize;
 
-        (0..size)
+        let data = (0..size)
             .map(|_| {
                 let length = content.read(buffer);
                 buffer[..length].to_vec()
             })
-            .collect()
+            .collect();
+        
+        self.wait_for_read.notify_all();
+        data
     }
 
     pub(crate) fn compute_size_for(max_element_size: usize, capacity: usize) -> usize {
@@ -152,9 +158,7 @@ impl CircularQueueContent {
             self.reader_index as usize * (ELEMENT_SIZE_TYPE + self.max_element_size as usize);
         let data_index = buffer_index + ELEMENT_SIZE_TYPE;
         let element_size = ElementSizeType::from_ne_bytes(
-            self.buffer[buffer_index..data_index]
-                .try_into()
-                .unwrap(),
+            self.buffer[buffer_index..data_index].try_into().unwrap(),
         );
 
         value[..element_size].clone_from_slice(&self.buffer[data_index..data_index + element_size]);
@@ -194,9 +198,7 @@ mod tests {
         let queue = unsafe { &mut *(init_buffer as *mut CircularQueue) };
         queue.init(ELEMENT_SIZE, capacity);
 
-        let write = |data: &Data| {
-            queue.try_write(any_as_u8_slice(data))
-        };
+        let write = |data: &Data| queue.try_write(any_as_u8_slice(data));
 
         let read = || {
             let mut buffer = [0u8; ELEMENT_SIZE];
@@ -209,17 +211,26 @@ mod tests {
         assert_eq!(expected_d1, read());
 
         for i in 0..1000 {
-            let data = Data { v1: i, v2: i as f64 };
+            let data = Data {
+                v1: i,
+                v2: i as f64,
+            };
             write(&data);
             assert_eq!(data, read());
         }
-        
+
         for i in 0..capacity {
-            let data = Data { v1: i as i32, v2: i as f64 };
+            let data = Data {
+                v1: i as i32,
+                v2: i as f64,
+            };
             write(&data);
         }
         for i in 0..capacity {
-            let data = Data { v1: i as i32, v2: i as f64 };
+            let data = Data {
+                v1: i as i32,
+                v2: i as f64,
+            };
             assert_eq!(data, read());
         }
     }
