@@ -92,7 +92,7 @@ impl CircularQueue {
                 buffer[..length].to_vec()
             })
             .collect();
-        
+
         self.wait_for_read.notify_all();
         data
     }
@@ -103,7 +103,21 @@ impl CircularQueue {
     }
 
     const fn size_of_fields() -> usize {
-        size_of::<u64>() + size_of::<u32>() * 4 + size_of::<u64>()
+        #[repr(C)]
+        struct CircularQueueSized {
+            wait_for_read: SharedCondvar,
+            wait_for_write: SharedCondvar,
+            content: SharedMutex<CircularQueueContentSized>,
+        }
+        #[repr(C)]
+        struct CircularQueueContentSized {
+            writer_index: u32,
+            reader_index: u32,
+            max_element_size: u32,
+            capacity: u32,
+            full: bool,
+        }
+        size_of::<CircularQueueSized>()
     }
 }
 
