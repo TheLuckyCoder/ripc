@@ -20,7 +20,7 @@ fn ripc(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
     use std::num::NonZero;
-    
+
     const NAME: &str = "/test";
     const DEFAULT_SIZE:u32 = 1024;
 
@@ -28,18 +28,15 @@ mod tests {
         let writer = SharedWriter::new(name.to_string(), NonZero::new(size).unwrap()).unwrap();
         let reader = SharedReader::new(name.to_string()).unwrap();
 
-        pyo3::append_to_inittab!(ripc);
-        pyo3::prepare_freethreaded_python();
-
         (writer, reader)
     }
 
     #[test]
     fn simple_write_try_read() {
-        let (writer, reader) = init(NAME, DEFAULT_SIZE);
         let data = (0u8..255u8).collect::<Vec<_>>();
 
         Python::with_gil(|py| {
+            let (writer, reader) = init(NAME, DEFAULT_SIZE);
             let none = reader.try_read(py);
             assert!(none.is_none());
 
@@ -47,6 +44,27 @@ mod tests {
             let version = writer.last_written_version();
 
             let bytes = reader.try_read(py).unwrap();
+            assert_eq!(bytes.as_bytes(), data);
+            assert_eq!(version, reader.last_read_version());
+
+            let none = reader.try_read(py);
+            assert!(none.is_none());
+        });
+    }
+    
+    #[test]
+    fn simple_write_blocking_read() {
+        let data = (0u8..255u8).collect::<Vec<_>>();
+
+        Python::with_gil(|py| {
+            let (writer, reader) = init(NAME, DEFAULT_SIZE);
+            let none = reader.try_read(py);
+            assert!(none.is_none());
+
+            writer.write(&data, py).unwrap();
+            let version = writer.last_written_version();
+
+            let bytes = reader.blocking_read(py).unwrap();
             assert_eq!(bytes.as_bytes(), data);
             assert_eq!(version, reader.last_read_version());
 
