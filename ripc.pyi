@@ -1,45 +1,28 @@
+class SharedMemory(object):
 
-class SharedMemoryWriter(object):
-    def __init__(self, name: str, size: int):
+    @staticmethod
+    def create(name: str, size: int) -> 'SharedMemory':
         """
         :parameter name: is recommended to start with a '/'
         :parameter size: cannot be 0
         """
         pass
 
+    @staticmethod
+    def open(name: str, read_only: bool = False) -> 'SharedMemory':
+        """
+        :parameter name: is recommended to start with a '/'
+        :parameter read_only
+        """
+        pass
+
     def write(self, bytes_to_write: bytes) -> None:
         """
         Writes the bytes into the shared memory
+        
+        Will throw an error if the SharedMemory was opened as read-only
         """
         pass
-
-    def name(self) -> str:
-        """
-        :returns: the name of this shared memory file
-        """
-        pass
-
-    def memory_size(self) -> int:
-        """
-        :returns: Amount of bytes allocated in this shared memory
-        """
-        pass
-
-    def last_written_version(self) -> int:
-        """
-        :returns: the latest version that was written
-        """
-        pass
-
-    def close(self) -> None:
-        """
-        Signals to the readers that they should stop reading from the shared memory
-        """
-        pass
-
-
-class SharedMemoryReader:
-    def __init__(self, name: str): ...
 
     def try_read(self) -> bytes | None:
         """
@@ -55,6 +38,25 @@ class SharedMemoryReader:
         """
         pass
 
+    def is_new_version_available(self) -> bool:
+        """
+        Check if the next read will return a new message
+        :returns: true if there is a new version
+        """
+        pass
+
+    def last_written_version(self) -> int:
+        """
+        :returns: the latest version that was written
+        """
+        pass
+
+    def last_read_version(self) -> int:
+        """
+        :returns: the latest version that was read
+        """
+        pass
+
     def name(self) -> str:
         """
         :returns: the name of this shared memory file
@@ -67,33 +69,26 @@ class SharedMemoryReader:
         """
         pass
 
-    def new_version_available(self) -> bool:
-        """
-        Check if the next read will return a new message
-        :returns: true if there is a new version
-        """
-        pass
-
-    def last_read_version(self) -> int:
-        """
-        :returns: the latest version that was read
-        """
-        pass
-
     def is_closed(self) -> bool:
         """
         Check if the shared memory has been closed by the writer
         :returns: true if the writer has marked this as closed
         """
 
+    def close(self) -> None:
+        """
+        Signals to the readers that they should stop reading from the shared memory
+        """
+        pass
+
 
 class SharedMemoryCircularQueue:
     @staticmethod
-    def create(name: str, max_element_size: int, capacity: int):
+    def create(name: str, max_element_size: int, capacity: int) -> 'SharedMemoryCircularQueue':
         pass
-    
+
     @staticmethod
-    def open(name: str):
+    def open(name: str, read_only: bool = False) -> 'SharedMemoryCircularQueue':
         pass
 
     def __len__(self) -> int:
@@ -140,4 +135,3 @@ class SharedMemoryCircularQueue:
         :returns: a list of all the elements in the queue
         """
         pass
-    

@@ -1,4 +1,4 @@
-use std::ffi::{CString};
+use std::ffi::CString;
 use std::os::fd::OwnedFd;
 use std::ptr::slice_from_raw_parts_mut;
 
@@ -46,7 +46,7 @@ impl SharedMemoryHolder {
                 unsafe {
                     (*memory).fill(0);
                 }
-                
+
                 Ok(Self {
                     name,
                     _fd: shm,

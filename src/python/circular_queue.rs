@@ -1,11 +1,11 @@
+use crate::circular_queue::CircularQueue;
+use crate::primitives::memory_holder::SharedMemoryHolder;
+use pyo3::exceptions::{PyPermissionError, PyValueError};
+use pyo3::types::PyBytes;
+use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::num::NonZeroU32;
-use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
-use pyo3::exceptions::PyValueError;
-use pyo3::types::PyBytes;
-use crate::circular_queue::CircularQueue;
-use crate::primitives::memory_holder::SharedMemoryHolder;
 
 #[pyclass]
 #[pyo3(frozen, name = "SharedMemoryCircularQueue")]
@@ -14,6 +14,7 @@ pub struct SharedCircularQueue {
     name: String,
     max_element_size: usize,
     buffer: RefCell<Vec<u8>>,
+    read_only: bool,
 }
 
 fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
@@ -42,11 +43,13 @@ impl SharedCircularQueue {
             name,
             max_element_size,
             buffer: RefCell::new(vec![0u8; max_element_size]),
+            read_only: false,
         })
     }
 
     #[staticmethod]
-    fn open(name: String) -> PyResult<Self> {
+    #[pyo3(signature = (name, read_only=false))]
+    fn open(name: String, read_only: bool) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Topic cannot be empty"));
         }
@@ -61,6 +64,7 @@ impl SharedCircularQueue {
             name,
             max_element_size,
             buffer: RefCell::new(vec![0u8; max_element_size]),
+            read_only,
         })
     }
 
@@ -104,6 +108,9 @@ impl SharedCircularQueue {
     }
 
     fn try_write(&self, data: &[u8]) -> PyResult<bool> {
+        if self.read_only {
+            return Err(PyPermissionError::new_err("Queue was opened as read-only"));
+        }
         if data.len() > self.max_element_size {
             return Err(PyValueError::new_err(format!(
                 "Data size {} exceeds max element size {}",
@@ -115,6 +122,9 @@ impl SharedCircularQueue {
     }
 
     fn blocking_write(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
+        if self.read_only {
+            return Err(PyPermissionError::new_err("Queue was opened as read-only"));
+        }
         if data.len() > self.max_element_size {
             return Err(PyValueError::new_err(format!(
                 "Data size {} exceeds max element size {}",
