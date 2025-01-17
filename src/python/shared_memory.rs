@@ -1,12 +1,12 @@
 use crate::primitives::memory_holder::SharedMemoryHolder;
+use crate::python::{no_read_permission_err, no_write_permission_err, OpenMode};
 use crate::shared_memory::SharedMemory;
-use pyo3::exceptions::{PyPermissionError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::types::PyBytes;
 use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use crate::python::{no_read_permission_err, no_write_permission_err, MemoryPermission};
 
 #[pyclass]
 #[pyo3(frozen, name = "SharedMemory")]
@@ -14,7 +14,7 @@ pub struct PythonSharedMemory {
     shared_memory: SharedMemoryHolder,
     name: String,
     memory_size: usize,
-    read_only: bool,
+    open_mode: OpenMode,
     last_written_version: AtomicUsize,
     last_read_version: AtomicUsize,
 }
@@ -26,7 +26,8 @@ fn deref_shared_memory(shared_memory: &SharedMemoryHolder) -> &SharedMemory {
 #[pymethods]
 impl PythonSharedMemory {
     #[staticmethod]
-    pub fn create(name: String, size: NonZeroU32) -> PyResult<Self> {
+    #[pyo3(signature = (name, size, mode=OpenMode::ReadWrite))]
+    fn create(name: String, size: NonZeroU32, mode: OpenMode) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Name cannot be empty"));
         }
@@ -47,13 +48,13 @@ impl PythonSharedMemory {
             memory_size,
             last_written_version: AtomicUsize::default(),
             last_read_version: AtomicUsize::default(),
-            read_only: false,
+            open_mode: mode,
         })
     }
 
     #[staticmethod]
-    #[pyo3(signature = (name, read_only=false))]
-    pub fn open(name: String, read_only: bool) -> PyResult<Self> {
+    #[pyo3(signature = (name, mode=OpenMode::ReadWrite))]
+    fn open(name: String, mode: OpenMode) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Name cannot be empty"));
         }
@@ -68,15 +69,14 @@ impl PythonSharedMemory {
             shared_memory,
             last_written_version: AtomicUsize::default(),
             last_read_version: AtomicUsize::default(),
-            read_only,
+            open_mode: mode,
         })
     }
 
-    pub fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
-        // if !self.permissions.can_write() {
-        //     return Err(no_write_permission_err());
-        // }
-        let shared_memory = deref_shared_memory(&self.shared_memory);
+    fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
+        if !self.open_mode.can_write() {
+            no_write_permission_err();
+        }
 
         if data.len() > self.memory_size {
             return Err(PyValueError::new_err(format!(
@@ -86,16 +86,17 @@ impl PythonSharedMemory {
             )));
         }
 
+        let shared_memory = deref_shared_memory(&self.shared_memory);
         let version = py.allow_threads(|| shared_memory.write_message(data));
         self.last_written_version.store(version, Ordering::Relaxed);
 
         Ok(())
     }
 
-    pub fn try_read<'p>(&self, py: Python<'p>) -> PyResult<Option<Bound<'p, PyBytes>>> {
-        // if !self.permissions.can_read() {
-        //     return Err(no_read_permission_err());
-        // }
+    fn try_read<'p>(&self, py: Python<'p>) -> PyResult<Option<Bound<'p, PyBytes>>> {
+        if !self.open_mode.can_read() {
+            no_read_permission_err();
+        }
         let last_read_version = self.last_read_version.load(Ordering::Relaxed);
         let memory = deref_shared_memory(&self.shared_memory);
 
@@ -115,10 +116,10 @@ impl PythonSharedMemory {
         Ok(None)
     }
 
-    pub fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
-        // if !self.permissions.can_read() {
-        //     return Err(no_read_permission_err());
-        // }
+    fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
+        if !self.open_mode.can_read() {
+            no_read_permission_err();
+        }
         let last_read_version = self.last_read_version.load(Ordering::Relaxed);
         let memory = deref_shared_memory(&self.shared_memory);
 
@@ -140,7 +141,11 @@ impl PythonSharedMemory {
         }
     }
 
-    pub fn is_new_version_available(&self) -> bool {
+    fn is_new_version_available(&self) -> bool {
+        if !self.open_mode.can_read() {
+            no_read_permission_err();
+        }
+        
         let last_read_version = self.last_read_version.load(Ordering::Relaxed);
         let version = deref_shared_memory(&self.shared_memory)
             .version
@@ -148,41 +153,37 @@ impl PythonSharedMemory {
         version != last_read_version
     }
 
-    pub fn last_written_version(&self) -> usize {
+    fn last_written_version(&self) -> usize {
         self.last_written_version.load(Ordering::Relaxed)
     }
 
-    pub fn last_read_version(&self) -> usize {
+    fn last_read_version(&self) -> usize {
         self.last_read_version.load(Ordering::Relaxed)
     }
 
-    pub fn name(&self) -> &str {
+    fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn memory_size(&self) -> usize {
+    fn memory_size(&self) -> usize {
         self.memory_size
     }
 
-    pub fn is_closed(&self) -> bool {
+    fn is_closed(&self) -> bool {
         deref_shared_memory(&self.shared_memory)
             .closed
             .load(Ordering::Relaxed)
     }
 
-    pub fn close(&self) -> PyResult<()> {
-        if self.read_only {
-            return Err(PyPermissionError::new_err(
-                "Shared memory was opened as read-only",
-            ));
+    fn close(&self) {
+        if !self.open_mode.can_write() {
+            no_write_permission_err();
         }
         let memory = deref_shared_memory(&self.shared_memory);
 
         let _ = memory.data.lock();
         memory.closed.store(true, Ordering::Relaxed);
         memory.condvar.notify_all();
-
-        Ok(())
     }
 }
 

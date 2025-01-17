@@ -1,6 +1,7 @@
 use crate::circular_queue::CircularQueue;
 use crate::primitives::memory_holder::SharedMemoryHolder;
-use pyo3::exceptions::{PyPermissionError, PyValueError};
+use crate::python::{no_read_permission_err, no_write_permission_err, OpenMode};
+use pyo3::exceptions::PyValueError;
 use pyo3::types::PyBytes;
 use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
 use std::cell::RefCell;
@@ -14,7 +15,7 @@ pub struct SharedCircularQueue {
     name: String,
     max_element_size: usize,
     buffer: RefCell<Vec<u8>>,
-    read_only: bool,
+    open_mode: OpenMode,
 }
 
 fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
@@ -24,7 +25,13 @@ fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
 #[pymethods]
 impl SharedCircularQueue {
     #[staticmethod]
-    fn create(name: String, max_element_size: NonZeroU32, capacity: NonZeroU32) -> PyResult<Self> {
+    #[pyo3(signature = (name, max_element_size, capacity, mode=OpenMode::ReadWrite))]
+    fn create(
+        name: String,
+        max_element_size: NonZeroU32,
+        capacity: NonZeroU32,
+        mode: OpenMode,
+    ) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Name cannot be empty"));
         }
@@ -43,13 +50,13 @@ impl SharedCircularQueue {
             name,
             max_element_size,
             buffer: RefCell::new(vec![0u8; max_element_size]),
-            read_only: false,
+            open_mode: mode,
         })
     }
 
     #[staticmethod]
-    #[pyo3(signature = (name, read_only=false))]
-    fn open(name: String, read_only: bool) -> PyResult<Self> {
+    #[pyo3(signature = (name, mode=OpenMode::ReadWrite))]
+    fn open(name: String, mode: OpenMode) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Topic cannot be empty"));
         }
@@ -64,7 +71,7 @@ impl SharedCircularQueue {
             name,
             max_element_size,
             buffer: RefCell::new(vec![0u8; max_element_size]),
-            read_only,
+            open_mode: mode,
         })
     }
 
@@ -81,6 +88,10 @@ impl SharedCircularQueue {
     }
 
     fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
+        if !self.open_mode.can_read() {
+            no_read_permission_err();
+        }
+
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
 
@@ -93,6 +104,10 @@ impl SharedCircularQueue {
     }
 
     fn blocking_read<'p>(&self, py: Python<'p>) -> Bound<'p, PyBytes> {
+        if !self.open_mode.can_read() {
+            no_read_permission_err();
+        }
+
         let queue = deref_queue(&self.shared_memory);
 
         let mut borrowed_buffer = self.buffer.borrow_mut();
@@ -103,14 +118,19 @@ impl SharedCircularQueue {
     }
 
     fn read_all(&self) -> Vec<Vec<u8>> {
+        if !self.open_mode.can_read() {
+            no_read_permission_err();
+        }
+
         let mut borrowed_buffer = self.buffer.borrow_mut();
         deref_queue(&self.shared_memory).read_all(borrowed_buffer.as_mut_slice())
     }
 
     fn try_write(&self, data: &[u8]) -> PyResult<bool> {
-        if self.read_only {
-            return Err(PyPermissionError::new_err("Queue was opened as read-only"));
+        if !self.open_mode.can_write() {
+            no_write_permission_err();
         }
+
         if data.len() > self.max_element_size {
             return Err(PyValueError::new_err(format!(
                 "Data size {} exceeds max element size {}",
@@ -122,9 +142,10 @@ impl SharedCircularQueue {
     }
 
     fn blocking_write(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
-        if self.read_only {
-            return Err(PyPermissionError::new_err("Queue was opened as read-only"));
+        if !self.open_mode.can_write() {
+            no_write_permission_err();
         }
+
         if data.len() > self.max_element_size {
             return Err(PyValueError::new_err(format!(
                 "Data size {} exceeds max element size {}",
@@ -136,6 +157,14 @@ impl SharedCircularQueue {
 
         py.allow_threads(|| queue.blocking_write(data));
         Ok(())
+    }
+
+    fn is_closed(&self) -> bool {
+        deref_queue(&self.shared_memory).is_closed()
+    }
+
+    fn close(&self) {
+        deref_queue(&self.shared_memory).close()
     }
 }
 

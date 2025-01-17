@@ -1,18 +1,28 @@
+from enum import Enum
+
+
+class OpenMode(Enum):
+    ReadOnly = 0,
+    WriteOnly = 1,
+    ReadWrite = 2
+
+
 class SharedMemory(object):
 
     @staticmethod
-    def create(name: str, size: int) -> 'SharedMemory':
+    def create(name: str, size: int, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemory':
         """
-        :parameter name: is recommended to start with a '/'
-        :parameter size: cannot be 0
+        :param name: is recommended to start with a '/'
+        :param size: cannot be 0
+        :param mode: 
         """
         pass
 
     @staticmethod
-    def open(name: str, read_only: bool = False) -> 'SharedMemory':
+    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemory':
         """
-        :parameter name: is recommended to start with a '/'
-        :parameter read_only
+        :param name: is recommended to start with a '/'
+        :param mode: 
         """
         pass
 
@@ -84,11 +94,11 @@ class SharedMemory(object):
 
 class SharedMemoryCircularQueue:
     @staticmethod
-    def create(name: str, max_element_size: int, capacity: int) -> 'SharedMemoryCircularQueue':
+    def create(name: str, max_element_size: int, capacity: int, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemoryCircularQueue':
         pass
 
     @staticmethod
-    def open(name: str, read_only: bool = False) -> 'SharedMemoryCircularQueue':
+    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemoryCircularQueue':
         pass
 
     def __len__(self) -> int:
@@ -133,5 +143,17 @@ class SharedMemoryCircularQueue:
     def read_all(self) -> list[bytes]:
         """
         :returns: a list of all the elements in the queue
+        """
+        pass
+
+    def is_closed(self) -> bool:
+        """
+        Check if the shared memory has been closed by the writer
+        :returns: true if the writer has marked this as closed
+        """
+
+    def close(self) -> None:
+        """
+        Signals to the readers that they should stop reading from the shared memory
         """
         pass

@@ -9,32 +9,33 @@ mod shared_memory;
 
 #[pyclass(eq, eq_int)]
 #[derive(Copy, Clone, PartialEq)]
-enum MemoryPermission {
-    ReadOnly,
-    WriteOnly,
-    ReadWrite
+enum OpenMode {
+    ReadOnly = 0,
+    WriteOnly = 1,
+    ReadWrite = 2
 }
 
-impl MemoryPermission {
+impl OpenMode {
     fn can_read(self) -> bool {
         self == Self::ReadOnly || self == Self::ReadWrite
     }
-    
+
     fn can_write(self) -> bool {
         self == Self::WriteOnly || self == Self::ReadWrite
     }
 }
 
-fn no_read_permission_err() -> PyErr {
-    PyValueError::new_err("Shared memory was opened as write-only")
+fn no_read_permission_err() -> ! {
+    panic!("Shared memory was opened as write-only")
 }
 
-fn no_write_permission_err() -> PyErr {
-    PyValueError::new_err("Shared memory was opened as read-only")
+fn no_write_permission_err() -> ! {
+    panic!("Shared memory was opened as read-only")
 }
 
-#[pymodule]
+#[pymodule(gil_used = false)]
 fn ripc(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<OpenMode>()?;
     m.add_class::<PythonSharedMemory>()?;
     m.add_class::<SharedCircularQueue>()?;
     Ok(())
