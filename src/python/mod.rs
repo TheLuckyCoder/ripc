@@ -2,14 +2,13 @@ use crate::python::circular_queue::SharedCircularQueue;
 use crate::python::shared_memory::PythonSharedMemory;
 use pyo3::prelude::*;
 use pyo3::{pymodule, Bound, PyResult};
-use pyo3::exceptions::PyValueError;
 
 mod circular_queue;
 mod shared_memory;
 
 #[pyclass(eq, eq_int)]
 #[derive(Copy, Clone, PartialEq)]
-enum OpenMode {
+pub enum OpenMode {
     ReadOnly = 0,
     WriteOnly = 1,
     ReadWrite = 2
@@ -41,7 +40,7 @@ fn ripc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-/*#[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::num::NonZero;
@@ -51,8 +50,8 @@ mod tests {
 
     fn init(name: &str, size: u32) -> (PythonSharedMemory, PythonSharedMemory) {
         let writer =
-            PythonSharedMemory::create(name.to_string(), NonZero::new(size).unwrap()).unwrap();
-        let reader = PythonSharedMemory::open(name.to_string(), true).unwrap();
+            PythonSharedMemory::create(name.to_string(), NonZero::new(size).unwrap(), OpenMode::WriteOnly).unwrap();
+        let reader = PythonSharedMemory::open(name.to_string(), OpenMode::ReadOnly).unwrap();
 
         (writer, reader)
     }
@@ -113,29 +112,9 @@ mod tests {
 
             assert!(reader.try_read(py).is_none());
 
-            writer.close().unwrap();
+            writer.close();
             assert!(reader.blocking_read(py).is_none());
             assert!(reader.try_read(py).is_none());
         });
     }
-
-    #[test]
-    fn multiple_writes() {
-        Python::with_gil(|py| {
-            let (writer, reader) = init(NAME, DEFAULT_SIZE);
-            assert!(reader.try_read(py).is_none());
-
-            for i in 10..100 {
-                let data = (0u8..i).collect::<Vec<_>>();
-                writer.write(&data, py).unwrap();
-                let version = writer.last_written_version();
-
-                let bytes = reader.try_read(py).unwrap();
-                assert_eq!(version, reader.last_read_version());
-                assert_eq!(bytes.as_bytes(), data);
-
-                assert!(reader.try_read(py).is_none());
-            }
-        });
-    }
-}*/
+}

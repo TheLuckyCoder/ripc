@@ -1,12 +1,13 @@
 use crate::primitives::condvar::SharedCondvar;
 use crate::primitives::mutex::SharedMutex;
-use std::cmp::Ordering;
 use std::mem::size_of;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[repr(C)]
 pub(crate) struct CircularQueue<T: ?Sized = CircularQueueContent> {
     wait_for_read: SharedCondvar,
     wait_for_write: SharedCondvar,
+    closed: AtomicBool,
     content: SharedMutex<T>,
 }
 
@@ -32,7 +33,7 @@ impl CircularQueue {
 
     pub(crate) fn try_write(&self, value: &[u8]) -> bool {
         let mut content = self.content.lock();
-        if content.full {
+        if content.full || self.is_closed() {
             return false;
         }
 
@@ -42,39 +43,46 @@ impl CircularQueue {
         true
     }
 
-    pub(crate) fn blocking_write(&self, value: &[u8]) {
+    pub(crate) fn blocking_write(&self, value: &[u8]) -> bool {
         let mut content = self.content.lock();
         if content.full {
-            content = self.wait_for_read.wait_while(content, |guard| guard.full);
+            content = self.wait_for_read.wait_while(content, |guard| guard.full && !self.is_closed());
+        }
+        if self.is_closed() {
+            return false;
         }
 
         content.write(value);
         self.wait_for_write.notify_one();
+        true
     }
 
-    pub(crate) fn try_read(&self, value: &mut [u8]) -> usize {
+    pub(crate) fn try_read(&self, value: &mut [u8]) -> Option<usize> {
         let mut content = self.content.lock();
 
-        if content.len() == 0 {
-            return 0;
+        if content.len() == 0 || self.is_closed() {
+            return None;
         }
 
         let size = content.read(value);
         self.wait_for_read.notify_one();
-        size
+        Some(size)
     }
 
-    pub(crate) fn blocking_read(&self, value: &mut [u8]) -> usize {
+    pub(crate) fn blocking_read(&self, value: &mut [u8]) -> Option<usize> {
         let mut content = self.content.lock();
         if content.len() == 0 {
             content = self
                 .wait_for_write
-                .wait_while(content, |guard| guard.len() == 0);
+                .wait_while(content, |guard| guard.len() == 0 && !self.is_closed());
+        }
+        if self.is_closed() {
+            return None;
         }
 
         let size = content.read(value);
         self.wait_for_read.notify_one();
-        size
+        Some(size)
     }
 
     pub(crate) fn max_element_size(&self) -> usize {
@@ -83,6 +91,10 @@ impl CircularQueue {
     }
 
     pub(crate) fn read_all(&self, buffer: &mut [u8]) -> Vec<Vec<u8>> {
+        if self.is_closed() {
+            return Vec::new();
+        }
+        
         let mut content = self.content.lock();
         let size = content.len() as usize;
 
@@ -95,6 +107,17 @@ impl CircularQueue {
 
         self.wait_for_read.notify_all();
         data
+    }
+    
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Relaxed)
+    }
+    
+    pub(crate) fn close(&self) {
+        let _ = self.content.lock();
+        self.closed.store(true, Ordering::Relaxed);
+        self.wait_for_write.notify_all();
+        self.wait_for_read.notify_all();
     }
 
     pub(crate) fn compute_size_for(max_element_size: usize, capacity: usize) -> usize {
@@ -131,6 +154,8 @@ const ELEMENT_SIZE_TYPE: usize = size_of::<ElementSizeType>();
 
 impl CircularQueueContent {
     pub(crate) fn len(&self) -> u32 {
+        use std::cmp::Ordering;
+        
         if self.full {
             return self.capacity;
         }
@@ -210,7 +235,7 @@ mod tests {
 
         let read = || {
             let mut buffer = [0u8; ELEMENT_SIZE];
-            assert_eq!(queue.try_read(&mut buffer), ELEMENT_SIZE);
+            assert_eq!(queue.try_read(&mut buffer), Some(ELEMENT_SIZE));
             unsafe { std::mem::transmute(buffer) }
         };
 

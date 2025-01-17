@@ -63,7 +63,7 @@ impl SharedCircularQueue {
 
         let shared_memory = SharedMemoryHolder::open(CString::new(name.clone())?)?;
 
-        let queue = unsafe { &mut *(shared_memory.slice_ptr() as *mut CircularQueue) };
+        let queue = deref_queue(&shared_memory);
         let max_element_size = queue.max_element_size();
 
         Ok(Self {
@@ -91,7 +91,7 @@ impl SharedCircularQueue {
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
 
-        let length = deref_queue(&self.shared_memory).try_read(buffer);
+        let length = deref_queue(&self.shared_memory).try_read(buffer)?;
         if length != 0 {
             Some(PyBytes::new(py, &buffer[..length]))
         } else {
@@ -99,7 +99,7 @@ impl SharedCircularQueue {
         }
     }
 
-    fn blocking_read<'p>(&self, py: Python<'p>) -> Bound<'p, PyBytes> {
+    fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         if !self.open_mode.can_read() {
             no_read_permission_err();
         }
@@ -108,9 +108,9 @@ impl SharedCircularQueue {
 
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
-        let length = py.allow_threads(|| queue.blocking_read(buffer));
+        let length = py.allow_threads(|| queue.blocking_read(buffer))?;
 
-        PyBytes::new(py, &buffer[..length])
+        Some(PyBytes::new(py, &buffer[..length]))
     }
 
     fn read_all(&self) -> Vec<Vec<u8>> {
@@ -137,7 +137,7 @@ impl SharedCircularQueue {
         Ok(deref_queue(&self.shared_memory).try_write(data))
     }
 
-    fn blocking_write(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
+    fn blocking_write(&self, py: Python<'_>, data: &[u8]) -> PyResult<bool> {
         if !self.open_mode.can_write() {
             no_write_permission_err();
         }
@@ -151,8 +151,7 @@ impl SharedCircularQueue {
         }
         let queue = deref_queue(&self.shared_memory);
 
-        py.allow_threads(|| queue.blocking_write(data));
-        Ok(())
+        Ok(py.allow_threads(|| queue.blocking_write(data)))
     }
 
     pub fn name(&self) -> &str {

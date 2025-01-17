@@ -112,13 +112,13 @@ class SharedMemoryCircularQueue:
 
     def try_read(self) -> bytes | None:
         """
-        :returns: an element or None, if the queue is empty
+        :returns: an element or None, if the queue is empty or closed
         """
         pass
 
-    def blocking_read(self) -> bytes:
+    def blocking_read(self) -> bytes | None:
         """
-        Blocks the current thread until an element is available
+        Blocks the current thread until an element is available or None if the queue is closed
         :return: an element from the queue
         """
         pass
@@ -132,11 +132,12 @@ class SharedMemoryCircularQueue:
         """
         pass
 
-    def blocking_write(self, data: bytes):
+    def blocking_write(self, data: bytes) -> bool:
         """
         Blocks the current thread until the element is added to the queue
         
         :param data: element to add to queue
+        :return: false if the queue is closed
         """
         pass
 
@@ -163,6 +164,7 @@ class SharedMemoryCircularQueue:
         Check if the shared memory has been closed by the writer
         :returns: true if the writer has marked this as closed
         """
+        pass
 
     def close(self) -> None:
         """
