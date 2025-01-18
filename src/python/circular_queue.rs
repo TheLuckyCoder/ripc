@@ -83,10 +83,6 @@ impl SharedCircularQueue {
         deref_queue(&self.shared_memory).is_full()
     }
 
-    fn name(&self) -> &str {
-        &self.name
-    }
-
     fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         if !self.open_mode.can_read() {
             no_read_permission_err();
@@ -157,6 +153,14 @@ impl SharedCircularQueue {
 
         py.allow_threads(|| queue.blocking_write(data));
         Ok(())
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn memory_size(&self) -> usize {
+        self.shared_memory.slice_ptr().len()
     }
 
     fn is_closed(&self) -> bool {

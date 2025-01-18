@@ -146,6 +146,18 @@ class SharedMemoryCircularQueue:
         """
         pass
 
+    def name(self) -> str:
+        """
+        :returns: the name of this shared memory file
+        """
+        pass
+
+    def memory_size(self) -> int:
+        """
+        :returns: Amount of bytes allocated in this shared memory
+        """
+        pass
+
     def is_closed(self) -> bool:
         """
         Check if the shared memory has been closed by the writer

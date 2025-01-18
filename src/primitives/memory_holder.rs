@@ -1,5 +1,5 @@
-use std::ffi::CString;
-use std::os::fd::OwnedFd;
+use std::ffi::{c_void, CString};
+use std::os::fd::{BorrowedFd, OwnedFd};
 use std::ptr::slice_from_raw_parts_mut;
 
 use rustix::fs::Mode;
@@ -28,29 +28,16 @@ impl SharedMemoryHolder {
             return Err(e.into());
         }
 
-        // Map shared memory
-        let mmap_result = unsafe {
-            rustix::mm::mmap(
-                std::ptr::null_mut(),
-                size,
-                ProtFlags::READ | ProtFlags::WRITE,
-                MapFlags::SHARED,
-                &shm,
-                0,
-            )
-        };
-
-        match mmap_result {
-            Ok(ptr) => {
-                let memory = slice_from_raw_parts_mut(ptr.cast(), size);
+        match Self::map_memory(&shm) {
+            Ok(slice_ptr) => {
                 unsafe {
-                    (*memory).fill(0);
+                    (*slice_ptr).fill(0);
                 }
 
                 Ok(Self {
                     name,
                     _fd: shm,
-                    memory,
+                    memory: slice_ptr,
                     created: true,
                 })
             }
@@ -65,8 +52,21 @@ impl SharedMemoryHolder {
         // Open shared memory
         let shm = rustix::shm::shm_open(&name, ShmOFlags::RDWR, Mode::all())?;
 
-        // Read size
-        let stats = rustix::fs::fstat(&shm)?;
+        Ok(Self {
+            name,
+            memory: Self::map_memory(&shm)?,
+            _fd: shm,
+            created: false,
+        })
+    }
+
+    pub fn slice_ptr(&self) -> *mut [u8] {
+        self.memory
+    }
+
+    fn map_memory(shm: &OwnedFd) -> rustix::io::Result<*mut [u8]> {
+        // Read actual size
+        let stats = rustix::fs::fstat(shm)?;
         let size = stats.st_size as usize;
 
         // Map shared memory
@@ -76,21 +76,12 @@ impl SharedMemoryHolder {
                 size,
                 ProtFlags::READ | ProtFlags::WRITE,
                 MapFlags::SHARED,
-                &shm,
+                shm,
                 0,
-            )
-        }?;
+            )?
+        };
 
-        Ok(Self {
-            name,
-            _fd: shm,
-            memory: slice_from_raw_parts_mut(ptr.cast(), size),
-            created: false,
-        })
-    }
-
-    pub fn slice_ptr(&self) -> *mut [u8] {
-        self.memory
+        Ok(slice_from_raw_parts_mut(ptr.cast(), size))
     }
 }
 
