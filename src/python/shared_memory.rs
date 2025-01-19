@@ -1,5 +1,5 @@
 use crate::primitives::memory_holder::SharedMemoryHolder;
-use crate::python::{no_read_permission_err, no_write_permission_err, OpenMode};
+use crate::python::OpenMode;
 use crate::shared_memory::SharedMemory;
 use pyo3::exceptions::PyValueError;
 use pyo3::types::PyBytes;
@@ -74,9 +74,7 @@ impl PythonSharedMemory {
     }
 
     pub fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
-        if !self.open_mode.can_write() {
-            no_write_permission_err();
-        }
+        self.open_mode.check_write_permission();
 
         if data.len() > self.memory_size {
             return Err(PyValueError::new_err(format!(
@@ -94,9 +92,7 @@ impl PythonSharedMemory {
     }
 
     pub fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
-        if !self.open_mode.can_read() {
-            no_read_permission_err();
-        }
+        self.open_mode.check_read_permission();
         let last_read_version = self.last_read_version.load(Ordering::Relaxed);
         let memory = deref_shared_memory(&self.shared_memory);
 
@@ -116,9 +112,8 @@ impl PythonSharedMemory {
     }
 
     pub fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
-        if !self.open_mode.can_read() {
-            no_read_permission_err();
-        }
+        self.open_mode.check_read_permission();
+
         let last_read_version = self.last_read_version.load(Ordering::Relaxed);
         let memory = deref_shared_memory(&self.shared_memory);
 
@@ -141,9 +136,7 @@ impl PythonSharedMemory {
     }
 
     pub fn is_new_version_available(&self) -> bool {
-        if !self.open_mode.can_read() {
-            no_read_permission_err();
-        }
+        self.open_mode.check_read_permission();
 
         let last_read_version = self.last_read_version.load(Ordering::Relaxed);
         let version = deref_shared_memory(&self.shared_memory)
@@ -175,9 +168,7 @@ impl PythonSharedMemory {
     }
 
     pub fn close(&self) {
-        if !self.open_mode.can_write() {
-            no_write_permission_err();
-        }
+        self.open_mode.check_write_permission();
         let memory = deref_shared_memory(&self.shared_memory);
 
         let _ = memory.data.lock();

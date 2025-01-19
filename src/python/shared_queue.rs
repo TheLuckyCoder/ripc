@@ -1,5 +1,6 @@
 use crate::circular_queue::CircularQueue;
 use crate::primitives::memory_holder::SharedMemoryHolder;
+use crate::python::OpenMode;
 use pyo3::exceptions::PyValueError;
 use pyo3::{pyclass, pymethods, PyResult};
 use std::ffi::CString;
@@ -14,6 +15,7 @@ pub struct SharedQueue {
     sender: Mutex<Option<Sender<Vec<u8>>>>,
     name: String,
     max_element_size: usize,
+    open_mode: OpenMode,
 }
 fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
     unsafe { &*(memory_holder.slice_ptr() as *const CircularQueue) }
@@ -22,10 +24,11 @@ fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
 #[pymethods]
 impl SharedQueue {
     #[staticmethod]
-    #[pyo3(signature = (name, max_element_size, buffer_size = NonZeroU32::new(8).unwrap()))]
+    #[pyo3(signature = (name, max_element_size, mode, buffer_size = NonZeroU32::new(8).unwrap()))]
     fn create(
         name: String,
         max_element_size: NonZeroU32,
+        mode: OpenMode,
         buffer_size: NonZeroU32,
     ) -> PyResult<Self> {
         if name.is_empty() {
@@ -46,11 +49,12 @@ impl SharedQueue {
             name,
             max_element_size,
             sender: Mutex::default(),
+            open_mode: mode,
         })
     }
 
     #[staticmethod]
-    fn open(name: String) -> PyResult<Self> {
+    fn open(name: String, mode: OpenMode) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Name cannot be empty"));
         }
@@ -62,10 +66,13 @@ impl SharedQueue {
             max_element_size: deref_queue(&shared_memory).max_element_size(),
             shared_memory,
             sender: Mutex::default(),
+            open_mode: mode,
         })
     }
 
     fn write(&self, data: Vec<u8>) -> PyResult<()> {
+        self.open_mode.check_write_permission();
+        
         let mut guard = self.sender.lock().unwrap();
         let sender = guard.get_or_insert_with(|| {
             let (sender, receiver) = channel::<Vec<u8>>();
@@ -76,7 +83,9 @@ impl SharedQueue {
                 let queue = deref_queue(&shared_memory);
 
                 loop {
-                    let data = receiver.recv().unwrap();
+                    let Ok(data) = receiver.recv() else {
+                        break;
+                    };
                     if !queue.blocking_write(&data) {
                         break;
                     }
@@ -94,8 +103,10 @@ impl SharedQueue {
 
         Ok(())
     }
-    
+
     fn try_read(&self) -> Option<Vec<u8>> {
+        self.open_mode.check_read_permission();
+        
         let mut buffer = vec![0u8; self.max_element_size];
 
         let size = deref_queue(&self.shared_memory).try_read(&mut buffer)?;
@@ -105,6 +116,7 @@ impl SharedQueue {
     }
 
     fn blocking_read(&self) -> Option<Vec<u8>> {
+        self.open_mode.check_read_permission();
         let mut buffer = vec![0u8; self.max_element_size];
 
         let size = deref_queue(&self.shared_memory).blocking_read(&mut buffer)?;

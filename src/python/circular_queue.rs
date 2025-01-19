@@ -1,6 +1,6 @@
 use crate::circular_queue::CircularQueue;
 use crate::primitives::memory_holder::SharedMemoryHolder;
-use crate::python::{no_read_permission_err, no_write_permission_err, OpenMode};
+use crate::python::OpenMode;
 use pyo3::exceptions::PyValueError;
 use pyo3::types::PyBytes;
 use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
@@ -84,9 +84,7 @@ impl SharedCircularQueue {
     }
 
     fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
-        if !self.open_mode.can_read() {
-            no_read_permission_err();
-        }
+        self.open_mode.check_read_permission();
 
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
@@ -100,9 +98,7 @@ impl SharedCircularQueue {
     }
 
     fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
-        if !self.open_mode.can_read() {
-            no_read_permission_err();
-        }
+        self.open_mode.check_read_permission();
 
         let queue = deref_queue(&self.shared_memory);
 
@@ -114,18 +110,14 @@ impl SharedCircularQueue {
     }
 
     fn read_all(&self) -> Vec<Vec<u8>> {
-        if !self.open_mode.can_read() {
-            no_read_permission_err();
-        }
+        self.open_mode.check_read_permission();
 
         let mut borrowed_buffer = self.buffer.borrow_mut();
         deref_queue(&self.shared_memory).read_all(borrowed_buffer.as_mut_slice())
     }
 
     fn try_write(&self, data: &[u8]) -> PyResult<bool> {
-        if !self.open_mode.can_write() {
-            no_write_permission_err();
-        }
+        self.open_mode.check_write_permission();
 
         if data.len() > self.max_element_size {
             return Err(PyValueError::new_err(format!(
@@ -138,9 +130,7 @@ impl SharedCircularQueue {
     }
 
     fn blocking_write(&self, py: Python<'_>, data: &[u8]) -> PyResult<bool> {
-        if !self.open_mode.can_write() {
-            no_write_permission_err();
-        }
+        self.open_mode.check_write_permission();
 
         if data.len() > self.max_element_size {
             return Err(PyValueError::new_err(format!(
@@ -167,6 +157,7 @@ impl SharedCircularQueue {
     }
 
     fn close(&self) {
+        self.open_mode.check_write_permission();
         deref_queue(&self.shared_memory).close()
     }
 }

@@ -94,7 +94,8 @@ class SharedMemory(object):
 
 class SharedMemoryCircularQueue:
     @staticmethod
-    def create(name: str, max_element_size: int, capacity: int, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemoryCircularQueue':
+    def create(name: str, max_element_size: int, capacity: int,
+               mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemoryCircularQueue':
         pass
 
     @staticmethod
@@ -171,14 +172,16 @@ class SharedMemoryCircularQueue:
         Signals to the readers that they should stop reading from the shared memory
         """
         pass
-    
+
+
 class SharedMemoryQueue:
     @staticmethod
-    def create(name: str, max_element_size: int, buffer_size = 8) -> 'SharedMemoryCircularQueue':
+    def create(name: str, max_element_size: int, mode: OpenMode = OpenMode.ReadWrite,
+               buffer_size=8) -> 'SharedMemoryQueue':
         pass
 
     @staticmethod
-    def open(name: str) -> 'SharedMemoryCircularQueue':
+    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemoryQueue':
         pass
 
     def write(self, data: bytes):
