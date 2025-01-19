@@ -76,9 +76,9 @@ impl SharedQueue {
         })
     }
 
-    fn write(&self, bytes: Bound<'_, PyBytes>) -> PyResult<()> {
+    fn write(&self, data: Bound<'_, PyBytes>) -> PyResult<()> {
         self.open_mode.check_write_permission();
-        let queue_data = QueueData::new(bytes);
+        let queue_data = QueueData::new(data);
 
         let mut guard = self.sender.lock().unwrap();
         let sender = guard.get_or_insert_with(|| {
@@ -104,13 +104,9 @@ impl SharedQueue {
             sender
         });
 
-        if sender.send(queue_data).is_err() {
-            return Err(PyValueError::new_err(
-                "Failed to send data, the queue has been closed".to_string(),
-            ));
-        }
-
-        Ok(())
+        sender.send(queue_data).map_err(|_| {
+            PyValueError::new_err("Failed to send data, the queue has been closed".to_string())
+        })
     }
 
     fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {

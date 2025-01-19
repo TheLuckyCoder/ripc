@@ -26,11 +26,17 @@ class SharedMemory(object):
         """
         pass
 
-    def write(self, bytes_to_write: bytes) -> None:
+    def write(self, data: bytes) -> None:
         """
-        Writes the bytes into the shared memory
-        
-        Will throw an error if the SharedMemory was opened as read-only
+        Writes the bytes into the shared memory, blocks until writing is complete
+        This function also releases the GIL, while writing to the shared memory
+        """
+        pass
+    
+    def async_write(self, data: bytes) -> None:
+        """
+        Sends the bytes to a background thread to write into the shared memory
+        This method will never block the current thread
         """
         pass
 
@@ -139,12 +145,6 @@ class SharedMemoryCircularQueue:
         
         :param data: element to add to queue
         :return: false if the queue is closed
-        """
-        pass
-
-    def read_all(self) -> list[bytes]:
-        """
-        :returns: a list of all the elements in the queue
         """
         pass
 

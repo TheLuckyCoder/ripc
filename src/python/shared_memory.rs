@@ -1,4 +1,5 @@
 use crate::container::shared_memory::SharedMemory;
+use crate::helpers::queue_data::QueueData;
 use crate::primitives::memory_holder::SharedMemoryHolder;
 use crate::python::OpenMode;
 use pyo3::exceptions::PyValueError;
@@ -7,20 +8,42 @@ use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{channel, Sender};
+use std::sync::{Arc, Mutex};
 
 #[pyclass]
 #[pyo3(frozen, name = "SharedMemory")]
 pub struct PythonSharedMemory {
-    shared_memory: SharedMemoryHolder,
+    shared_memory: Arc<SharedMemoryHolder>,
     name: String,
     memory_size: usize,
     open_mode: OpenMode,
-    last_written_version: AtomicUsize,
+    last_written_version: Arc<AtomicUsize>,
     last_read_version: AtomicUsize,
+    sender: Mutex<Option<Sender<QueueData>>>,
 }
 
 fn deref_shared_memory(shared_memory: &SharedMemoryHolder) -> &SharedMemory {
     unsafe { &*(shared_memory.slice_ptr() as *const SharedMemory) }
+}
+
+impl PythonSharedMemory {
+    pub fn new(
+        shared_memory: SharedMemoryHolder,
+        name: String,
+        memory_size: usize,
+        open_mode: OpenMode,
+    ) -> Self {
+        Self {
+            shared_memory: Arc::new(shared_memory),
+            name,
+            memory_size,
+            open_mode,
+            last_written_version: Arc::default(),
+            last_read_version: AtomicUsize::default(),
+            sender: Mutex::default(),
+        }
+    }
 }
 
 #[pymethods]
@@ -42,14 +65,7 @@ impl PythonSharedMemory {
         let memory = deref_shared_memory(&shared_memory);
         let memory_size = memory.data.lock().bytes.len();
 
-        Ok(Self {
-            shared_memory,
-            name,
-            memory_size,
-            last_written_version: AtomicUsize::default(),
-            last_read_version: AtomicUsize::default(),
-            open_mode: mode,
-        })
+        Ok(Self::new(shared_memory, name, memory_size, mode))
     }
 
     #[staticmethod]
@@ -63,14 +79,7 @@ impl PythonSharedMemory {
         let memory = deref_shared_memory(&shared_memory);
         let memory_size = memory.data.lock().bytes.len();
 
-        Ok(Self {
-            name,
-            memory_size,
-            shared_memory,
-            last_written_version: AtomicUsize::default(),
-            last_read_version: AtomicUsize::default(),
-            open_mode: mode,
-        })
+        Ok(Self::new(shared_memory, name, memory_size, mode))
     }
 
     pub fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
@@ -89,6 +98,48 @@ impl PythonSharedMemory {
         self.last_written_version.store(version, Ordering::Relaxed);
 
         Ok(())
+    }
+
+    pub fn async_write(&self, data: Bound<'_, PyBytes>) -> PyResult<()> {
+        self.open_mode.check_write_permission();
+        let queue_data = QueueData::new(data);
+
+        if queue_data.bytes().len() > self.memory_size {
+            return Err(PyValueError::new_err(format!(
+                "Message is too large to be sent! Max size: {}. Current message size: {}",
+                self.memory_size,
+                queue_data.bytes().len()
+            )));
+        }
+
+        let mut guard = self.sender.lock().unwrap();
+        let sender = guard.get_or_insert_with(|| {
+            let (sender, receiver) = channel::<QueueData>();
+
+            let last_written_version = self.last_written_version.clone();
+            let shared_memory = self.shared_memory.clone();
+            std::thread::spawn(move || {
+                let memory = deref_shared_memory(&shared_memory);
+
+                loop {
+                    let Ok(data) = receiver.recv() else {
+                        break;
+                    };
+                    if memory.closed.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let new_version = memory.write_message(data.bytes());
+
+                    last_written_version.store(new_version, Ordering::Relaxed);
+                }
+            });
+
+            sender
+        });
+
+        sender.send(queue_data).map_err(|_| {
+            PyValueError::new_err("Failed to send data, the queue has been closed".to_string())
+        })
     }
 
     pub fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
