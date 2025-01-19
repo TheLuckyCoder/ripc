@@ -185,5 +185,3 @@ impl PythonSharedMemory {
         memory.condvar.notify_all();
     }
 }
-
-unsafe impl Sync for PythonSharedMemory {}

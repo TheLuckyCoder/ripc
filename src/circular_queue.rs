@@ -46,7 +46,9 @@ impl CircularQueue {
     pub(crate) fn blocking_write(&self, value: &[u8]) -> bool {
         let mut content = self.content.lock();
         if content.full {
-            content = self.wait_for_read.wait_while(content, |guard| guard.full && !self.is_closed());
+            content = self
+                .wait_for_read
+                .wait_while(content, |guard| guard.full && !self.is_closed());
         }
         if self.is_closed() {
             return false;
@@ -94,7 +96,7 @@ impl CircularQueue {
         if self.is_closed() {
             return Vec::new();
         }
-        
+
         let mut content = self.content.lock();
         let size = content.len() as usize;
 
@@ -108,11 +110,11 @@ impl CircularQueue {
         self.wait_for_read.notify_all();
         data
     }
-    
+
     pub(crate) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Relaxed)
     }
-    
+
     pub(crate) fn close(&self) {
         let _ = self.content.lock();
         self.closed.store(true, Ordering::Relaxed);
@@ -155,7 +157,7 @@ const ELEMENT_SIZE_TYPE: usize = size_of::<ElementSizeType>();
 impl CircularQueueContent {
     pub(crate) fn len(&self) -> u32 {
         use std::cmp::Ordering;
-        
+
         if self.full {
             return self.capacity;
         }

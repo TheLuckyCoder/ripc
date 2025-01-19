@@ -171,3 +171,60 @@ class SharedMemoryCircularQueue:
         Signals to the readers that they should stop reading from the shared memory
         """
         pass
+    
+class SharedMemoryQueue:
+    @staticmethod
+    def create(name: str, max_element_size: int, buffer_size = 8) -> 'SharedMemoryCircularQueue':
+        pass
+
+    @staticmethod
+    def open(name: str) -> 'SharedMemoryCircularQueue':
+        pass
+
+    def write(self, data: bytes):
+        """
+        Writes an element to the queue
+        when called for the first time it creates a feeder thread that will write the data to the shared memory
+        This method will never block the current thread
+        
+        :param data: element to add to queue
+        """
+        pass
+
+    def try_read(self) -> bytes | None:
+        """
+        Return an element from the queue if one is available
+        :return: an element from the queue or None if the queue is closed
+        """
+        pass
+
+    def blocking_read(self) -> bytes | None:
+        """
+        Blocks the current thread until an element is available or None if the queue is closed
+        :return: an element from the queue
+        """
+        pass
+
+    def name(self) -> str:
+        """
+        :returns: the name of this shared memory file
+        """
+        pass
+
+    def memory_size(self) -> int:
+        """
+        :returns: Amount of bytes allocated in this shared memory
+        """
+        pass
+
+    def is_closed(self) -> bool:
+        """
+        :returns: true the queue has been marked as closed
+        """
+        pass
+
+    def close(self) -> None:
+        """
+        Signals to the readers that they should stop reading and stops all feeder threads
+        """
+        pass

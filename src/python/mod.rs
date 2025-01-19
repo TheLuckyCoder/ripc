@@ -1,17 +1,19 @@
 use crate::python::circular_queue::SharedCircularQueue;
 use crate::python::shared_memory::PythonSharedMemory;
+use crate::python::shared_queue::SharedQueue;
 use pyo3::prelude::*;
 use pyo3::{pymodule, Bound, PyResult};
 
 mod circular_queue;
 mod shared_memory;
+mod shared_queue;
 
 #[pyclass(eq, eq_int)]
 #[derive(Copy, Clone, PartialEq)]
 pub enum OpenMode {
     ReadOnly = 0,
     WriteOnly = 1,
-    ReadWrite = 2
+    ReadWrite = 2,
 }
 
 impl OpenMode {
@@ -37,6 +39,7 @@ fn ripc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<OpenMode>()?;
     m.add_class::<PythonSharedMemory>()?;
     m.add_class::<SharedCircularQueue>()?;
+    m.add_class::<SharedQueue>()?;
     Ok(())
 }
 
@@ -49,8 +52,12 @@ mod tests {
     const DEFAULT_SIZE: u32 = 1024;
 
     fn init(name: &str, size: u32) -> (PythonSharedMemory, PythonSharedMemory) {
-        let writer =
-            PythonSharedMemory::create(name.to_string(), NonZero::new(size).unwrap(), OpenMode::WriteOnly).unwrap();
+        let writer = PythonSharedMemory::create(
+            name.to_string(),
+            NonZero::new(size).unwrap(),
+            OpenMode::WriteOnly,
+        )
+        .unwrap();
         let reader = PythonSharedMemory::open(name.to_string(), OpenMode::ReadOnly).unwrap();
 
         (writer, reader)

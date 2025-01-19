@@ -1,5 +1,5 @@
-use std::ffi::{c_void, CString};
-use std::os::fd::{BorrowedFd, OwnedFd};
+use std::ffi::CString;
+use std::os::fd::OwnedFd;
 use std::ptr::slice_from_raw_parts_mut;
 
 use rustix::fs::Mode;
@@ -86,6 +86,7 @@ impl SharedMemoryHolder {
 }
 
 unsafe impl Send for SharedMemoryHolder {}
+unsafe impl Sync for SharedMemoryHolder {}
 
 impl Drop for SharedMemoryHolder {
     fn drop(&mut self) {

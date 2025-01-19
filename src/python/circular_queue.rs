@@ -171,4 +171,4 @@ impl SharedCircularQueue {
     }
 }
 
-unsafe impl Sync for SharedCircularQueue {}
+unsafe impl Sync for SharedCircularQueue {} // TODO: Remove this as its not safe to read from multiple processes
