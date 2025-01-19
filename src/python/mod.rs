@@ -24,13 +24,13 @@ impl OpenMode {
     fn can_write(self) -> bool {
         self == Self::WriteOnly || self == Self::ReadWrite
     }
-    
+
     fn check_read_permission(self) {
         if !self.can_read() {
             panic!("Shared memory was opened as write-only")
         }
     }
-    
+
     fn check_write_permission(self) {
         if !self.can_write() {
             panic!("Shared memory was opened as read-only")

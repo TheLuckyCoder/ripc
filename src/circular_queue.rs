@@ -59,19 +59,18 @@ impl CircularQueue {
         true
     }
 
-    pub(crate) fn try_read(&self, value: &mut [u8]) -> Option<usize> {
+    pub(crate) fn try_read(&self, read_into: impl FnMut(&[u8])) {
         let mut content = self.content.lock();
 
         if content.len() == 0 || self.is_closed() {
-            return None;
+            return;
         }
 
-        let size = content.read(value);
+        content.read_into(read_into);
         self.wait_for_read.notify_one();
-        Some(size)
     }
 
-    pub(crate) fn blocking_read(&self, value: &mut [u8]) -> Option<usize> {
+    pub(crate) fn blocking_read(&self, read_into: impl FnMut(&[u8])) {
         let mut content = self.content.lock();
         if content.len() == 0 {
             content = self
@@ -79,12 +78,11 @@ impl CircularQueue {
                 .wait_while(content, |guard| guard.len() == 0 && !self.is_closed());
         }
         if self.is_closed() {
-            return None;
+            return;
         }
 
-        let size = content.read(value);
+        content.read_into(read_into);
         self.wait_for_read.notify_one();
-        Some(size)
     }
 
     pub(crate) fn max_element_size(&self) -> usize {
@@ -201,6 +199,20 @@ impl CircularQueueContent {
         element_size
     }
 
+    pub(crate) fn read_into(&mut self, mut read_into: impl FnMut(&[u8])) {
+        self.reader_index = self.next_inc(self.reader_index);
+        self.full = false;
+
+        let buffer_index =
+            self.reader_index as usize * (ELEMENT_SIZE_TYPE + self.max_element_size as usize);
+        let data_index = buffer_index + ELEMENT_SIZE_TYPE;
+        let element_size = ElementSizeType::from_ne_bytes(
+            self.buffer[buffer_index..data_index].try_into().unwrap(),
+        );
+
+        read_into(&self.buffer[data_index..data_index + element_size]);
+    }
+
     #[inline]
     fn next_inc(&self, i: u32) -> u32 {
         (i + 1) % self.capacity
@@ -237,7 +249,10 @@ mod tests {
 
         let read = || {
             let mut buffer = [0u8; ELEMENT_SIZE];
-            assert_eq!(queue.try_read(&mut buffer), Some(ELEMENT_SIZE));
+            queue.try_read(|data| {
+                assert_eq!(data.len(), ELEMENT_SIZE);
+                buffer.copy_from_slice(data)
+            });
             unsafe { std::mem::transmute(buffer) }
         };
 

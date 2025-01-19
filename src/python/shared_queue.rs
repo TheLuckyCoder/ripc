@@ -2,9 +2,11 @@ use crate::circular_queue::CircularQueue;
 use crate::primitives::memory_holder::SharedMemoryHolder;
 use crate::python::OpenMode;
 use pyo3::exceptions::PyValueError;
-use pyo3::{pyclass, pymethods, PyResult};
+use pyo3::types::PyBytes;
+use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
 use std::ffi::CString;
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -14,8 +16,9 @@ pub struct SharedQueue {
     shared_memory: Arc<SharedMemoryHolder>,
     sender: Mutex<Option<Sender<Vec<u8>>>>,
     name: String,
-    max_element_size: usize,
     open_mode: OpenMode,
+    write_count: Arc<AtomicUsize>,
+    read_count: AtomicUsize,
 }
 fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
     unsafe { &*(memory_holder.slice_ptr() as *const CircularQueue) }
@@ -47,9 +50,10 @@ impl SharedQueue {
         Ok(Self {
             shared_memory,
             name,
-            max_element_size,
             sender: Mutex::default(),
             open_mode: mode,
+            write_count: Arc::default(),
+            read_count: AtomicUsize::default(),
         })
     }
 
@@ -63,23 +67,24 @@ impl SharedQueue {
 
         Ok(Self {
             name,
-            max_element_size: deref_queue(&shared_memory).max_element_size(),
             shared_memory,
             sender: Mutex::default(),
             open_mode: mode,
+            write_count: Arc::default(),
+            read_count: AtomicUsize::default(),
         })
     }
 
     fn write(&self, data: Vec<u8>) -> PyResult<()> {
         self.open_mode.check_write_permission();
-        
+
         let mut guard = self.sender.lock().unwrap();
         let sender = guard.get_or_insert_with(|| {
             let (sender, receiver) = channel::<Vec<u8>>();
 
-            let shared_memory_copy = self.shared_memory.clone();
+            let write_count = self.write_count.clone();
+            let shared_memory = self.shared_memory.clone();
             std::thread::spawn(move || {
-                let shared_memory = shared_memory_copy;
                 let queue = deref_queue(&shared_memory);
 
                 loop {
@@ -89,6 +94,8 @@ impl SharedQueue {
                     if !queue.blocking_write(&data) {
                         break;
                     }
+
+                    write_count.fetch_add(1, Ordering::Relaxed);
                 }
             });
 
@@ -104,25 +111,44 @@ impl SharedQueue {
         Ok(())
     }
 
-    fn try_read(&self) -> Option<Vec<u8>> {
+    fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         self.open_mode.check_read_permission();
-        
-        let mut buffer = vec![0u8; self.max_element_size];
 
-        let size = deref_queue(&self.shared_memory).try_read(&mut buffer)?;
-        buffer.truncate(size);
+        let mut data = None;
+        deref_queue(&self.shared_memory).try_read(|buffer| {
+            data = Some(PyBytes::new(py, buffer));
+        });
 
-        Some(buffer)
+        if data.is_some() {
+            self.read_count.fetch_add(1, Ordering::Relaxed);
+        }
+
+        data
     }
 
-    fn blocking_read(&self) -> Option<Vec<u8>> {
+    fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         self.open_mode.check_read_permission();
-        let mut buffer = vec![0u8; self.max_element_size];
 
-        let size = deref_queue(&self.shared_memory).blocking_read(&mut buffer)?;
-        buffer.truncate(size);
+        let mut data = None;
+        deref_queue(&self.shared_memory).blocking_read(|buffer| {
+            data = Some(PyBytes::new(py, buffer));
+        });
 
-        Some(buffer)
+        if data.is_some() {
+            self.read_count.fetch_add(1, Ordering::Relaxed);
+        }
+
+        data
+    }
+    
+    #[getter]
+    fn read_count(&self) -> usize {
+        self.read_count.load(Ordering::Relaxed)
+    }
+    
+    #[getter]
+    fn write_count(&self) -> usize {
+        self.write_count.load(Ordering::Relaxed)
     }
 
     pub fn name(&self) -> &str {
@@ -138,6 +164,8 @@ impl SharedQueue {
     }
 
     fn close(&self) {
+        self.open_mode.check_write_permission();
+
         deref_queue(&self.shared_memory).close();
     }
 }

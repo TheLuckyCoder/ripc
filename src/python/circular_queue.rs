@@ -84,7 +84,8 @@ impl SharedCircularQueue {
     }
 
     fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
-        self.open_mode.check_read_permission();
+        todo!("Implement try read");
+        /*self.open_mode.check_read_permission();
 
         let mut borrowed_buffer = self.buffer.borrow_mut();
         let buffer = borrowed_buffer.as_mut_slice();
@@ -94,11 +95,12 @@ impl SharedCircularQueue {
             Some(PyBytes::new(py, &buffer[..length]))
         } else {
             None
-        }
+        }*/
     }
 
     fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
-        self.open_mode.check_read_permission();
+        todo!("Implement blocking read");
+        /*self.open_mode.check_read_permission();
 
         let queue = deref_queue(&self.shared_memory);
 
@@ -106,7 +108,7 @@ impl SharedCircularQueue {
         let buffer = borrowed_buffer.as_mut_slice();
         let length = py.allow_threads(|| queue.blocking_read(buffer))?;
 
-        Some(PyBytes::new(py, &buffer[..length]))
+        Some(PyBytes::new(py, &buffer[..length]))*/
     }
 
     fn read_all(&self) -> Vec<Vec<u8>> {

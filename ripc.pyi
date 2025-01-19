@@ -208,6 +208,20 @@ class SharedMemoryQueue:
         """
         pass
 
+    @property
+    def read_count(self) -> int:
+        """
+        :return: the number of elements that have been read by this instance
+        """
+        pass
+
+    @property
+    def write_count(self) -> int:
+        """
+        :return: the number of elements that have been written by this instance
+        """
+        pass
+
     def name(self) -> str:
         """
         :returns: the name of this shared memory file
