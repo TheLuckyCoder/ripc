@@ -3,18 +3,43 @@ use crate::primitives::memory_holder::SharedMemoryHolder;
 use crate::python::OpenMode;
 use pyo3::exceptions::PyValueError;
 use pyo3::types::PyBytes;
-use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
+use pyo3::{pyclass, pymethods, Bound, Py, PyResult, Python};
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 
+struct QueueData {
+    _py_bytes: Py<PyBytes>,
+    bytes: *const [u8],
+}
+
+unsafe impl Send for QueueData {}
+
+impl QueueData {
+    fn new(data: Bound<PyBytes>) -> Self {
+        let gil = data.py();
+        let py_bytes = data.unbind();
+        let bytes = py_bytes.as_bytes(gil);
+
+        // bypass the rust borrow checker
+        Self {
+            bytes: bytes as *const [u8],
+            _py_bytes: py_bytes,
+        }
+    }
+
+    fn bytes(&self) -> &[u8] {
+        unsafe { &*self.bytes }
+    }
+}
+
 #[pyclass]
 #[pyo3(frozen, name = "SharedMemoryQueue")]
 pub struct SharedQueue {
     shared_memory: Arc<SharedMemoryHolder>,
-    sender: Mutex<Option<Sender<Vec<u8>>>>,
+    sender: Mutex<Option<Sender<QueueData>>>,
     name: String,
     open_mode: OpenMode,
     write_count: Arc<AtomicUsize>,
@@ -75,12 +100,13 @@ impl SharedQueue {
         })
     }
 
-    fn write(&self, data: Vec<u8>) -> PyResult<()> {
+    fn write(&self, bytes: Bound<'_, PyBytes>) -> PyResult<()> {
         self.open_mode.check_write_permission();
+        let queue_data = QueueData::new(bytes);
 
         let mut guard = self.sender.lock().unwrap();
         let sender = guard.get_or_insert_with(|| {
-            let (sender, receiver) = channel::<Vec<u8>>();
+            let (sender, receiver) = channel::<QueueData>();
 
             let write_count = self.write_count.clone();
             let shared_memory = self.shared_memory.clone();
@@ -91,7 +117,7 @@ impl SharedQueue {
                     let Ok(data) = receiver.recv() else {
                         break;
                     };
-                    if !queue.blocking_write(&data) {
+                    if !queue.blocking_write(data.bytes()) {
                         break;
                     }
 
@@ -102,7 +128,7 @@ impl SharedQueue {
             sender
         });
 
-        if sender.send(data).is_err() {
+        if sender.send(queue_data).is_err() {
             return Err(PyValueError::new_err(
                 "Failed to send data, the queue has been closed".to_string(),
             ));
@@ -140,12 +166,12 @@ impl SharedQueue {
 
         data
     }
-    
+
     #[getter]
     fn read_count(&self) -> usize {
         self.read_count.load(Ordering::Relaxed)
     }
-    
+
     #[getter]
     fn write_count(&self) -> usize {
         self.write_count.load(Ordering::Relaxed)
