@@ -1,6 +1,6 @@
+use crate::container::shared_memory::SharedMemory;
 use crate::primitives::memory_holder::SharedMemoryHolder;
 use crate::python::OpenMode;
-use crate::shared_memory::SharedMemory;
 use pyo3::exceptions::PyValueError;
 use pyo3::types::PyBytes;
 use pyo3::{pyclass, pymethods, Bound, PyResult, Python};

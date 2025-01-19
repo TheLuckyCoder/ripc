@@ -1,10 +1,9 @@
-use crate::circular_queue::CircularQueue;
+use crate::container::circular_queue::CircularQueue;
 use crate::primitives::memory_holder::SharedMemoryHolder;
 use crate::python::OpenMode;
 use pyo3::exceptions::PyValueError;
 use pyo3::types::PyBytes;
-use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
-use std::cell::RefCell;
+use pyo3::{pyclass, pymethods, Bound, Py, PyResult, Python};
 use std::ffi::CString;
 use std::num::NonZeroU32;
 
@@ -14,7 +13,6 @@ pub struct SharedCircularQueue {
     shared_memory: SharedMemoryHolder,
     name: String,
     max_element_size: usize,
-    buffer: RefCell<Vec<u8>>,
     open_mode: OpenMode,
 }
 
@@ -49,7 +47,6 @@ impl SharedCircularQueue {
             shared_memory,
             name,
             max_element_size,
-            buffer: RefCell::new(vec![0u8; max_element_size]),
             open_mode: mode,
         })
     }
@@ -70,7 +67,6 @@ impl SharedCircularQueue {
             shared_memory,
             name,
             max_element_size,
-            buffer: RefCell::new(vec![0u8; max_element_size]),
             open_mode: mode,
         })
     }
@@ -84,38 +80,31 @@ impl SharedCircularQueue {
     }
 
     fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
-        todo!("Implement try read");
-        /*self.open_mode.check_read_permission();
-
-        let mut borrowed_buffer = self.buffer.borrow_mut();
-        let buffer = borrowed_buffer.as_mut_slice();
-
-        let length = deref_queue(&self.shared_memory).try_read(buffer)?;
-        if length != 0 {
-            Some(PyBytes::new(py, &buffer[..length]))
-        } else {
-            None
-        }*/
-    }
-
-    fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
-        todo!("Implement blocking read");
-        /*self.open_mode.check_read_permission();
-
-        let queue = deref_queue(&self.shared_memory);
-
-        let mut borrowed_buffer = self.buffer.borrow_mut();
-        let buffer = borrowed_buffer.as_mut_slice();
-        let length = py.allow_threads(|| queue.blocking_read(buffer))?;
-
-        Some(PyBytes::new(py, &buffer[..length]))*/
-    }
-
-    fn read_all(&self) -> Vec<Vec<u8>> {
         self.open_mode.check_read_permission();
 
-        let mut borrowed_buffer = self.buffer.borrow_mut();
-        deref_queue(&self.shared_memory).read_all(borrowed_buffer.as_mut_slice())
+        let mut result = None;
+        deref_queue(&self.shared_memory).try_read(|data| {
+            result = Some(PyBytes::new(py, data));
+        });
+
+        result
+    }
+
+    fn blocking_read(&self, py: Python<'_>) -> Option<Py<PyBytes>> {
+        self.open_mode.check_read_permission();
+
+        let queue = deref_queue(&self.shared_memory);
+        let mut result = None;
+
+        py.allow_threads(|| {
+            queue.blocking_read(|data| {
+                Python::with_gil(|py| {
+                    result = Some(PyBytes::new(py, data).unbind());
+                })
+            })
+        });
+
+        result
     }
 
     fn try_write(&self, data: &[u8]) -> PyResult<bool> {
@@ -163,5 +152,3 @@ impl SharedCircularQueue {
         deref_queue(&self.shared_memory).close()
     }
 }
-
-unsafe impl Sync for SharedCircularQueue {} // TODO: Remove this as its not safe to read from multiple processes

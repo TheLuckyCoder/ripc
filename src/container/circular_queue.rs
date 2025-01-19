@@ -66,7 +66,7 @@ impl CircularQueue {
             return;
         }
 
-        content.read_into(read_into);
+        content.read(read_into);
         self.wait_for_read.notify_one();
     }
 
@@ -81,32 +81,13 @@ impl CircularQueue {
             return;
         }
 
-        content.read_into(read_into);
+        content.read(read_into);
         self.wait_for_read.notify_one();
     }
 
     pub(crate) fn max_element_size(&self) -> usize {
         let content = self.content.lock();
         content.max_element_size as usize
-    }
-
-    pub(crate) fn read_all(&self, buffer: &mut [u8]) -> Vec<Vec<u8>> {
-        if self.is_closed() {
-            return Vec::new();
-        }
-
-        let mut content = self.content.lock();
-        let size = content.len() as usize;
-
-        let data = (0..size)
-            .map(|_| {
-                let length = content.read(buffer);
-                buffer[..length].to_vec()
-            })
-            .collect();
-
-        self.wait_for_read.notify_all();
-        data
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -182,24 +163,7 @@ impl CircularQueueContent {
         self.buffer[data_index..data_index + element_size].clone_from_slice(value);
     }
 
-    pub(crate) fn read(&mut self, value: &mut [u8]) -> usize {
-        assert_eq!(value.len(), self.max_element_size as usize);
-        self.reader_index = self.next_inc(self.reader_index);
-        self.full = false;
-
-        let buffer_index =
-            self.reader_index as usize * (ELEMENT_SIZE_TYPE + self.max_element_size as usize);
-        let data_index = buffer_index + ELEMENT_SIZE_TYPE;
-        let element_size = ElementSizeType::from_ne_bytes(
-            self.buffer[buffer_index..data_index].try_into().unwrap(),
-        );
-
-        value[..element_size].clone_from_slice(&self.buffer[data_index..data_index + element_size]);
-
-        element_size
-    }
-
-    pub(crate) fn read_into(&mut self, mut read_into: impl FnMut(&[u8])) {
+    pub(crate) fn read(&mut self, mut read_into: impl FnMut(&[u8])) {
         self.reader_index = self.next_inc(self.reader_index);
         self.full = false;
 

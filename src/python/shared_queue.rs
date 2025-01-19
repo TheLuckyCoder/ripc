@@ -1,39 +1,15 @@
-use crate::circular_queue::CircularQueue;
+use crate::container::circular_queue::CircularQueue;
+use crate::helpers::queue_data::QueueData;
 use crate::primitives::memory_holder::SharedMemoryHolder;
 use crate::python::OpenMode;
 use pyo3::exceptions::PyValueError;
 use pyo3::types::PyBytes;
-use pyo3::{pyclass, pymethods, Bound, Py, PyResult, Python};
+use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
-
-struct QueueData {
-    _py_bytes: Py<PyBytes>,
-    bytes: *const [u8],
-}
-
-unsafe impl Send for QueueData {}
-
-impl QueueData {
-    fn new(data: Bound<PyBytes>) -> Self {
-        let gil = data.py();
-        let py_bytes = data.unbind();
-        let bytes = py_bytes.as_bytes(gil);
-
-        // bypass the rust borrow checker
-        Self {
-            bytes: bytes as *const [u8],
-            _py_bytes: py_bytes,
-        }
-    }
-
-    fn bytes(&self) -> &[u8] {
-        unsafe { &*self.bytes }
-    }
-}
 
 #[pyclass]
 #[pyo3(frozen, name = "SharedMemoryQueue")]
@@ -140,31 +116,31 @@ impl SharedQueue {
     fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         self.open_mode.check_read_permission();
 
-        let mut data = None;
-        deref_queue(&self.shared_memory).try_read(|buffer| {
-            data = Some(PyBytes::new(py, buffer));
+        let mut result = None;
+        deref_queue(&self.shared_memory).try_read(|data| {
+            result = Some(PyBytes::new(py, data));
         });
 
-        if data.is_some() {
+        if result.is_some() {
             self.read_count.fetch_add(1, Ordering::Relaxed);
         }
 
-        data
+        result
     }
 
     fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
         self.open_mode.check_read_permission();
 
-        let mut data = None;
-        deref_queue(&self.shared_memory).blocking_read(|buffer| {
-            data = Some(PyBytes::new(py, buffer));
+        let mut result = None;
+        deref_queue(&self.shared_memory).blocking_read(|data| {
+            result = Some(PyBytes::new(py, data));
         });
 
-        if data.is_some() {
+        if result.is_some() {
             self.read_count.fetch_add(1, Ordering::Relaxed);
         }
 
-        data
+        result
     }
 
     #[getter]
