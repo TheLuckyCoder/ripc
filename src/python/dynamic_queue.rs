@@ -12,8 +12,8 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 
 #[pyclass]
-#[pyo3(frozen, name = "SharedMemoryQueue")]
-pub struct SharedQueue {
+#[pyo3(frozen, name = "SharedQueue")]
+pub struct PythonSharedQueue {
     shared_memory: Arc<SharedMemoryHolder>,
     sender: Mutex<Option<Sender<QueueData>>>,
     name: String,
@@ -26,7 +26,7 @@ fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
 }
 
 #[pymethods]
-impl SharedQueue {
+impl PythonSharedQueue {
     #[staticmethod]
     #[pyo3(signature = (name, max_element_size, mode, buffer_size = NonZeroU32::new(8).unwrap()))]
     fn create(
@@ -138,6 +138,10 @@ impl SharedQueue {
 
         result
     }
+    
+    fn is_empty(&self) -> bool {
+        deref_queue(&self.shared_memory).len() == 0
+    }
 
     #[getter]
     fn read_count(&self) -> usize {
@@ -149,11 +153,11 @@ impl SharedQueue {
         self.write_count.load(Ordering::Relaxed)
     }
 
-    pub fn name(&self) -> &str {
+    fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn memory_size(&self) -> usize {
+    fn memory_size(&self) -> usize {
         self.shared_memory.slice_ptr().len()
     }
 

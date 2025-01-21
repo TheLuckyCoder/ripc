@@ -1,49 +1,21 @@
-use crate::python::circular_queue::SharedCircularQueue;
-use crate::python::shared_memory::PythonSharedMemory;
-use crate::python::shared_queue::SharedQueue;
+use crate::python::circular_queue::PythonSharedCircularQueue;
+use crate::python::message::PythonSharedMessage;
+use crate::python::dynamic_queue::PythonSharedQueue;
 use pyo3::prelude::*;
 use pyo3::{pymodule, Bound, PyResult};
+use crate::python::open_mode::OpenMode;
 
 mod circular_queue;
-mod shared_memory;
-mod shared_queue;
-
-#[pyclass(eq, eq_int)]
-#[derive(Copy, Clone, PartialEq)]
-pub enum OpenMode {
-    ReadOnly = 0,
-    WriteOnly = 1,
-    ReadWrite = 2,
-}
-
-impl OpenMode {
-    fn can_read(self) -> bool {
-        self == Self::ReadOnly || self == Self::ReadWrite
-    }
-
-    fn can_write(self) -> bool {
-        self == Self::WriteOnly || self == Self::ReadWrite
-    }
-
-    fn check_read_permission(self) {
-        if !self.can_read() {
-            panic!("Shared memory was opened as write-only")
-        }
-    }
-
-    fn check_write_permission(self) {
-        if !self.can_write() {
-            panic!("Shared memory was opened as read-only")
-        }
-    }
-}
+mod message;
+mod dynamic_queue;
+mod open_mode;
 
 #[pymodule(gil_used = false)]
 fn ripc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<OpenMode>()?;
-    m.add_class::<PythonSharedMemory>()?;
-    m.add_class::<SharedCircularQueue>()?;
-    m.add_class::<SharedQueue>()?;
+    m.add_class::<PythonSharedMessage>()?;
+    m.add_class::<PythonSharedCircularQueue>()?;
+    m.add_class::<PythonSharedQueue>()?;
     Ok(())
 }
 
@@ -55,14 +27,14 @@ mod tests {
     const NAME: &str = "/test";
     const DEFAULT_SIZE: u32 = 1024;
 
-    fn init(name: &str, size: u32) -> (PythonSharedMemory, PythonSharedMemory) {
-        let writer = PythonSharedMemory::create(
+    fn init(name: &str, size: u32) -> (PythonSharedMessage, PythonSharedMessage) {
+        let writer = PythonSharedMessage::create(
             name.to_string(),
             NonZero::new(size).unwrap(),
             OpenMode::WriteOnly,
         )
         .unwrap();
-        let reader = PythonSharedMemory::open(name.to_string(), OpenMode::ReadOnly).unwrap();
+        let reader = PythonSharedMessage::open(name.to_string(), OpenMode::ReadOnly).unwrap();
 
         (writer, reader)
     }

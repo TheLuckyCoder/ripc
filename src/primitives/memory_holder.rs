@@ -75,7 +75,7 @@ impl SharedMemoryHolder {
                 std::ptr::null_mut(),
                 size,
                 ProtFlags::READ | ProtFlags::WRITE,
-                MapFlags::SHARED,
+                MapFlags::SHARED_VALIDATE | MapFlags::POPULATE,
                 shm,
                 0,
             )?

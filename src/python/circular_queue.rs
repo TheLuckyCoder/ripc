@@ -8,8 +8,8 @@ use std::ffi::CString;
 use std::num::NonZeroU32;
 
 #[pyclass]
-#[pyo3(frozen, name = "SharedMemoryCircularQueue")]
-pub struct SharedCircularQueue {
+#[pyo3(frozen, name = "SharedCircularQueue")]
+pub struct PythonSharedCircularQueue {
     shared_memory: SharedMemoryHolder,
     name: String,
     max_element_size: usize,
@@ -21,7 +21,7 @@ fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
 }
 
 #[pymethods]
-impl SharedCircularQueue {
+impl PythonSharedCircularQueue {
     #[staticmethod]
     #[pyo3(signature = (name, max_element_size, capacity, mode=OpenMode::ReadWrite))]
     fn create(

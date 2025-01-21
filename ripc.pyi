@@ -7,10 +7,10 @@ class OpenMode(Enum):
     ReadWrite = 2
 
 
-class SharedMemory(object):
+class SharedMessage(object):
 
     @staticmethod
-    def create(name: str, size: int, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemory':
+    def create(name: str, size: int, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMessage':
         """
         :param name: is recommended to start with a '/'
         :param size: cannot be 0
@@ -19,7 +19,7 @@ class SharedMemory(object):
         pass
 
     @staticmethod
-    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemory':
+    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMessage':
         """
         :param name: is recommended to start with a '/'
         :param mode: 
@@ -32,8 +32,8 @@ class SharedMemory(object):
         This function also releases the GIL, while writing to the shared memory
         """
         pass
-    
-    def async_write(self, data: bytes) -> None:
+
+    def write_async(self, data: bytes) -> None:
         """
         Sends the bytes to a background thread to write into the shared memory
         This method will never block the current thread
@@ -98,14 +98,14 @@ class SharedMemory(object):
         pass
 
 
-class SharedMemoryCircularQueue:
+class SharedCircularQueue:
     @staticmethod
     def create(name: str, max_element_size: int, capacity: int,
-               mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemoryCircularQueue':
+               mode: OpenMode = OpenMode.ReadWrite) -> 'SharedCircularQueue':
         pass
 
     @staticmethod
-    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemoryCircularQueue':
+    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedCircularQueue':
         pass
 
     def __len__(self) -> int:
@@ -166,7 +166,7 @@ class SharedMemoryCircularQueue:
         :returns: true if the writer has marked this as closed
         """
         pass
-
+    
     def close(self) -> None:
         """
         Signals to the readers that they should stop reading from the shared memory
@@ -174,14 +174,14 @@ class SharedMemoryCircularQueue:
         pass
 
 
-class SharedMemoryQueue:
+class SharedQueue:
     @staticmethod
     def create(name: str, max_element_size: int, mode: OpenMode = OpenMode.ReadWrite,
-               buffer_size=8) -> 'SharedMemoryQueue':
+               buffer_size=8) -> 'SharedQueue':
         pass
 
     @staticmethod
-    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedMemoryQueue':
+    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedQueue':
         pass
 
     def write(self, data: bytes):
@@ -205,6 +205,13 @@ class SharedMemoryQueue:
         """
         Blocks the current thread until an element is available or None if the queue is closed
         :return: an element from the queue
+        """
+        pass
+
+    def is_empty(self) -> bool:
+        """
+        Because of the multiprocessing nature of the queue, this method is not reliable
+        :returns: true if the queue is empty
         """
         pass
 

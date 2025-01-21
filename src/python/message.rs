@@ -12,8 +12,8 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 
 #[pyclass]
-#[pyo3(frozen, name = "SharedMemory")]
-pub struct PythonSharedMemory {
+#[pyo3(frozen, name = "SharedMessage")]
+pub struct PythonSharedMessage {
     shared_memory: Arc<SharedMemoryHolder>,
     name: String,
     memory_size: usize,
@@ -27,7 +27,7 @@ fn deref_shared_memory(shared_memory: &SharedMemoryHolder) -> &SharedMemory {
     unsafe { &*(shared_memory.slice_ptr() as *const SharedMemory) }
 }
 
-impl PythonSharedMemory {
+impl PythonSharedMessage {
     pub fn new(
         shared_memory: SharedMemoryHolder,
         name: String,
@@ -47,7 +47,7 @@ impl PythonSharedMemory {
 }
 
 #[pymethods]
-impl PythonSharedMemory {
+impl PythonSharedMessage {
     #[staticmethod]
     #[pyo3(signature = (name, size, mode=OpenMode::ReadWrite))]
     pub fn create(name: String, size: NonZeroU32, mode: OpenMode) -> PyResult<Self> {
@@ -100,7 +100,7 @@ impl PythonSharedMemory {
         Ok(())
     }
 
-    pub fn async_write(&self, data: Bound<'_, PyBytes>) -> PyResult<()> {
+    pub fn write_async(&self, data: Bound<'_, PyBytes>) -> PyResult<()> {
         self.open_mode.check_write_permission();
         let queue_data = QueueData::new(data);
 
