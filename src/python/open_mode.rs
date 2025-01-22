@@ -9,11 +9,11 @@ pub enum OpenMode {
 }
 
 impl OpenMode {
-    fn can_read(self) -> bool {
+    pub fn can_read(self) -> bool {
         self == Self::ReadOnly || self == Self::ReadWrite
     }
 
-    fn can_write(self) -> bool {
+    pub fn can_write(self) -> bool {
         self == Self::WriteOnly || self == Self::ReadWrite
     }
 

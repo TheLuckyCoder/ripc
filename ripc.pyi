@@ -215,20 +215,6 @@ class SharedQueue:
         """
         pass
 
-    @property
-    def read_count(self) -> int:
-        """
-        :return: the number of elements that have been read by this instance
-        """
-        pass
-
-    @property
-    def write_count(self) -> int:
-        """
-        :return: the number of elements that have been written by this instance
-        """
-        pass
-
     def name(self) -> str:
         """
         :returns: the name of this shared memory file
@@ -252,3 +238,22 @@ class SharedQueue:
         Signals to the readers that they should stop reading and stops all feeder threads
         """
         pass
+
+def read_all(readers: list[SharedMessage]) -> list[bytes]:
+    """
+    Reads all the readers and returns a list of the messages
+    Each message is read concurrently
+    :param readers: list of readers
+    :return: list of messages
+    """
+    return [reader.try_read() for reader in readers]
+
+def read_all_map(readers: list[SharedMessage], map) -> list:
+    """
+    Reads all the readers and returns a list of the messages
+    Each message is read concurrently
+    :param readers: list of readers
+    :param map: function to apply to the message
+    :return: list of messages
+    """
+    return [map(reader.try_read()) for reader in readers]

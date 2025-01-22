@@ -1,4 +1,5 @@
-use crate::container::circular_queue::CircularQueue;
+use crate::container::shared_memory::SharedMemory;
+use crate::helpers::bytes::RustBytes;
 use crate::helpers::queue_data::QueueData;
 use crate::primitives::memory_holder::SharedMemoryHolder;
 use crate::python::OpenMode;
@@ -8,53 +9,57 @@ use pyo3::{pyclass, pymethods, Bound, PyResult, Python};
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+
+struct ReceiverQueueData {
+    version: usize,
+    data: RustBytes,
+}
 
 #[pyclass]
 #[pyo3(frozen, name = "SharedQueue")]
 pub struct PythonSharedQueue {
     shared_memory: Arc<SharedMemoryHolder>,
     sender: Mutex<Option<Sender<QueueData>>>,
+    receiver: Mutex<Option<Receiver<ReceiverQueueData>>>,
     name: String,
     open_mode: OpenMode,
-    write_count: Arc<AtomicUsize>,
-    read_count: AtomicUsize,
+    last_written_version: Arc<AtomicUsize>,
+    last_read_version: Arc<AtomicUsize>,
 }
-fn deref_queue(memory_holder: &SharedMemoryHolder) -> &CircularQueue {
-    unsafe { &*(memory_holder.slice_ptr() as *const CircularQueue) }
+
+fn deref_shared_memory(shared_memory: &SharedMemoryHolder) -> &SharedMemory {
+    unsafe { &*(shared_memory.slice_ptr() as *const SharedMemory) }
 }
 
 #[pymethods]
 impl PythonSharedQueue {
     #[staticmethod]
-    #[pyo3(signature = (name, max_element_size, mode, buffer_size = NonZeroU32::new(8).unwrap()))]
-    fn create(
-        name: String,
-        max_element_size: NonZeroU32,
-        mode: OpenMode,
-        buffer_size: NonZeroU32,
-    ) -> PyResult<Self> {
+    fn create(name: String, max_element_size: NonZeroU32, mode: OpenMode) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Name cannot be empty"));
         }
         let max_element_size = max_element_size.get() as usize;
-        let buffer_size = buffer_size.get() as usize;
 
         let shared_memory = Arc::new(SharedMemoryHolder::create(
             CString::new(name.clone())?,
-            CircularQueue::compute_size_for(max_element_size, buffer_size),
+            SharedMemory::size_of_fields() + max_element_size,
         )?);
-
-        deref_queue(&shared_memory).init(max_element_size, buffer_size);
+        
+        let last_read_version = Arc::new(AtomicUsize::default());
+        let receiver = mode.can_read().then(|| {
+            Self::start_reader_thread(shared_memory.clone(), last_read_version.clone())
+        });
 
         Ok(Self {
             shared_memory,
             name,
             sender: Mutex::default(),
+            receiver: Mutex::new(receiver),
             open_mode: mode,
-            write_count: Arc::default(),
-            read_count: AtomicUsize::default(),
+            last_written_version: Arc::default(),
+            last_read_version,
         })
     }
 
@@ -65,14 +70,20 @@ impl PythonSharedQueue {
         }
 
         let shared_memory = Arc::new(SharedMemoryHolder::open(CString::new(name.clone())?)?);
+        
+        let last_read_version = Arc::new(AtomicUsize::default());
+        let receiver = mode.can_read().then(|| {
+            Self::start_reader_thread(shared_memory.clone(), last_read_version.clone())
+        });
 
         Ok(Self {
             name,
             shared_memory,
             sender: Mutex::default(),
+            receiver: Mutex::new(receiver),
             open_mode: mode,
-            write_count: Arc::default(),
-            read_count: AtomicUsize::default(),
+            last_written_version: Arc::default(),
+            last_read_version,
         })
     }
 
@@ -84,20 +95,26 @@ impl PythonSharedQueue {
         let sender = guard.get_or_insert_with(|| {
             let (sender, receiver) = channel::<QueueData>();
 
-            let write_count = self.write_count.clone();
+            let last_written_version = self.last_written_version.clone();
             let shared_memory = self.shared_memory.clone();
             std::thread::spawn(move || {
-                let queue = deref_queue(&shared_memory);
+                let message = deref_shared_memory(&shared_memory);
 
                 loop {
                     let Ok(data) = receiver.recv() else {
                         break;
                     };
-                    if !queue.blocking_write(data.bytes()) {
-                        break;
+                    let lock = message.data.lock(); // TODO lock
+                    if message.version.load(Ordering::Relaxed)
+                        == message.reader_version.load(Ordering::Relaxed)
+                    {
+                        message.read_condvar.wait(lock);
+                    } else {
+                        drop(lock);
                     }
+                    message.write(data.bytes());
 
-                    write_count.fetch_add(1, Ordering::Relaxed);
+                    last_written_version.fetch_add(1, Ordering::Relaxed);
                 }
             });
 
@@ -109,48 +126,32 @@ impl PythonSharedQueue {
         })
     }
 
-    fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
+    fn try_read(&self) -> Option<RustBytes> {
         self.open_mode.check_read_permission();
 
-        let mut result = None;
-        deref_queue(&self.shared_memory).try_read(|data| {
-            result = Some(PyBytes::new(py, data));
-        });
+        let guard = self.receiver.lock().unwrap();
+        let receiver = guard.as_ref().expect("A reader must have a receiver");
 
-        if result.is_some() {
-            self.read_count.fetch_add(1, Ordering::Relaxed);
-        }
-
-        result
+        receiver.try_recv().ok().map(|message| {
+            self.last_read_version
+                .store(message.version, Ordering::Relaxed);
+            message.data
+        })
     }
 
-    fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
+    fn blocking_read(&self, py: Python<'_>) -> Option<RustBytes> {
         self.open_mode.check_read_permission();
 
-        let mut result = None;
-        deref_queue(&self.shared_memory).blocking_read(|data| {
-            result = Some(PyBytes::new(py, data));
-        });
+        py.allow_threads(|| {
+            let guard = self.receiver.lock().unwrap();
+            let receiver = guard.as_ref().expect("A reader must have a receiver");
 
-        if result.is_some() {
-            self.read_count.fetch_add(1, Ordering::Relaxed);
-        }
-
-        result
-    }
-    
-    fn is_empty(&self) -> bool {
-        deref_queue(&self.shared_memory).len() == 0
-    }
-
-    #[getter]
-    fn read_count(&self) -> usize {
-        self.read_count.load(Ordering::Relaxed)
-    }
-
-    #[getter]
-    fn write_count(&self) -> usize {
-        self.write_count.load(Ordering::Relaxed)
+            receiver.recv().ok().map(|message| {
+                self.last_read_version
+                    .store(message.version, Ordering::Relaxed);
+                message.data
+            })
+        })
     }
 
     fn name(&self) -> &str {
@@ -162,12 +163,39 @@ impl PythonSharedQueue {
     }
 
     fn is_closed(&self) -> bool {
-        deref_queue(&self.shared_memory).is_closed()
+        deref_shared_memory(&self.shared_memory).is_closed()
     }
 
     fn close(&self) {
         self.open_mode.check_write_permission();
 
-        deref_queue(&self.shared_memory).close();
+        deref_shared_memory(&self.shared_memory).close();
+    }
+}
+
+impl PythonSharedQueue {
+    fn start_reader_thread(
+        shared_memory: Arc<SharedMemoryHolder>,
+        last_read_version: Arc<AtomicUsize>,
+    ) -> Receiver<ReceiverQueueData> {
+        let (sender, receiver) = channel();
+        let local_last_reader_version = last_read_version.load(Ordering::Relaxed);
+
+        std::thread::spawn(move || {
+            let message = deref_shared_memory(&shared_memory);
+
+            while !message.is_closed() {
+                message.blocking_read(local_last_reader_version, |new_version, data| {
+                    let data = ReceiverQueueData {
+                        version: new_version,
+                        data: RustBytes::new(data),
+                    };
+
+                    let _ = sender.send(data);
+                });
+            }
+        });
+
+        receiver
     }
 }

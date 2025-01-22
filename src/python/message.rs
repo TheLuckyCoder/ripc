@@ -1,4 +1,5 @@
 use crate::container::shared_memory::SharedMemory;
+use crate::helpers::bytes::RustBytes;
 use crate::helpers::queue_data::QueueData;
 use crate::primitives::memory_holder::SharedMemoryHolder;
 use crate::python::OpenMode;
@@ -50,7 +51,7 @@ impl PythonSharedMessage {
 impl PythonSharedMessage {
     #[staticmethod]
     #[pyo3(signature = (name, size, mode=OpenMode::ReadWrite))]
-    pub fn create(name: String, size: NonZeroU32, mode: OpenMode) -> PyResult<Self> {
+    fn create(name: String, size: NonZeroU32, mode: OpenMode) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Name cannot be empty"));
         }
@@ -65,12 +66,16 @@ impl PythonSharedMessage {
         let memory = deref_shared_memory(&shared_memory);
         let memory_size = memory.data.lock().bytes.len();
 
+        if mode.can_read() {
+            memory.readers_count.fetch_add(1, Ordering::Relaxed);
+        }
+
         Ok(Self::new(shared_memory, name, memory_size, mode))
     }
 
     #[staticmethod]
     #[pyo3(signature = (name, mode=OpenMode::ReadWrite))]
-    pub fn open(name: String, mode: OpenMode) -> PyResult<Self> {
+    fn open(name: String, mode: OpenMode) -> PyResult<Self> {
         if name.is_empty() {
             return Err(PyValueError::new_err("Name cannot be empty"));
         }
@@ -79,10 +84,14 @@ impl PythonSharedMessage {
         let memory = deref_shared_memory(&shared_memory);
         let memory_size = memory.data.lock().bytes.len();
 
+        if mode.can_read() {
+            memory.readers_count.fetch_add(1, Ordering::Relaxed);
+        }
+
         Ok(Self::new(shared_memory, name, memory_size, mode))
     }
 
-    pub fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
+    fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
         self.open_mode.check_write_permission();
 
         if data.len() > self.memory_size {
@@ -94,13 +103,15 @@ impl PythonSharedMessage {
         }
 
         let shared_memory = deref_shared_memory(&self.shared_memory);
-        let version = py.allow_threads(|| shared_memory.write_message(data));
-        self.last_written_version.store(version, Ordering::Relaxed);
+        py.allow_threads(|| {
+            let version = shared_memory.write(data);
+            self.last_written_version.store(version, Ordering::Relaxed);
+        });
 
         Ok(())
     }
 
-    pub fn write_async(&self, data: Bound<'_, PyBytes>) -> PyResult<()> {
+    fn write_async(&self, data: Bound<'_, PyBytes>) -> PyResult<()> {
         self.open_mode.check_write_permission();
         let queue_data = QueueData::new(data);
 
@@ -125,10 +136,12 @@ impl PythonSharedMessage {
                     let Ok(data) = receiver.recv() else {
                         break;
                     };
+                    let data = receiver.try_iter().last().unwrap_or(data);
+                    
                     if memory.closed.load(Ordering::Relaxed) {
                         break;
                     }
-                    let new_version = memory.write_message(data.bytes());
+                    let new_version = memory.write(data.bytes());
 
                     last_written_version.store(new_version, Ordering::Relaxed);
                 }
@@ -142,88 +155,165 @@ impl PythonSharedMessage {
         })
     }
 
-    pub fn try_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
+    pub fn try_read(&self) -> Option<RustBytes> {
         self.open_mode.check_read_permission();
         let last_read_version = self.last_read_version.load(Ordering::Relaxed);
         let memory = deref_shared_memory(&self.shared_memory);
 
-        if memory.closed.load(Ordering::Relaxed) {
-            return None;
-        }
+        let mut result = None;
+        
+        memory.try_read(last_read_version, |new_version, data| {
+            self.last_read_version.store(new_version, Ordering::Relaxed);
+            result = Some(RustBytes::new(data));
+        });
 
-        let new_version = memory.version.load(Ordering::Relaxed);
-        if new_version == last_read_version {
-            return None;
-        }
-        let data_guard = memory.data.lock();
-
-        self.last_read_version.store(new_version, Ordering::Relaxed);
-
-        Some(PyBytes::new(py, &data_guard.bytes[..data_guard.size]))
+        result
     }
 
-    pub fn blocking_read<'p>(&self, py: Python<'p>) -> Option<Bound<'p, PyBytes>> {
+    fn blocking_read(&self, py: Python<'_>) -> Option<RustBytes> {
         self.open_mode.check_read_permission();
 
-        let last_read_version = self.last_read_version.load(Ordering::Relaxed);
         let memory = deref_shared_memory(&self.shared_memory);
+        let mut result = None;
 
-        let mut data = memory.data.lock();
-        loop {
-            if memory.closed.load(Ordering::Relaxed) {
-                return None;
-            }
-
-            let new_version = memory.version.load(Ordering::Relaxed);
-            if new_version != last_read_version {
+        py.allow_threads(|| {
+            let last_read_version = self.last_read_version.load(Ordering::Relaxed);
+            memory.blocking_read(last_read_version, |new_version, data| {
                 self.last_read_version.store(new_version, Ordering::Relaxed);
+                result = Some(RustBytes::new(data));
+            });
+        });
 
-                return Some(PyBytes::new(py, &data.bytes[..data.size]));
-            }
-
-            // Wait for new version
-            data = py.allow_threads(|| memory.condvar.wait(data));
-        }
+        result
     }
-
-    pub fn is_new_version_available(&self) -> bool {
+    
+    fn is_new_version_available(&self) -> bool {
         self.open_mode.check_read_permission();
 
         let last_read_version = self.last_read_version.load(Ordering::Relaxed);
-        let version = deref_shared_memory(&self.shared_memory)
-            .version
-            .load(Ordering::Relaxed);
-        version != last_read_version
+        deref_shared_memory(&self.shared_memory).is_new_version_available(last_read_version)
     }
 
-    pub fn last_written_version(&self) -> usize {
+    fn last_written_version(&self) -> usize {
         self.last_written_version.load(Ordering::Relaxed)
     }
 
-    pub fn last_read_version(&self) -> usize {
+    fn last_read_version(&self) -> usize {
         self.last_read_version.load(Ordering::Relaxed)
     }
 
-    pub fn name(&self) -> &str {
+    fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn memory_size(&self) -> usize {
+    fn memory_size(&self) -> usize {
         self.memory_size
     }
 
-    pub fn is_closed(&self) -> bool {
+    fn is_closed(&self) -> bool {
         deref_shared_memory(&self.shared_memory)
             .closed
             .load(Ordering::Relaxed)
     }
 
-    pub fn close(&self) {
+    fn close(&self) {
         self.open_mode.check_write_permission();
-        let memory = deref_shared_memory(&self.shared_memory);
+        deref_shared_memory(&self.shared_memory).close();
+    }
+}
 
-        let _ = memory.data.lock();
-        memory.closed.store(true, Ordering::Relaxed);
-        memory.condvar.notify_all();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::num::NonZero;
+    use std::thread;
+    use std::time::Duration;
+
+    const DEFAULT_SIZE: u32 = 1024;
+
+    fn init(name: &str, size: u32) -> PythonSharedMessage {
+        PythonSharedMessage::create(
+            name.to_string(),
+            NonZero::new(size).unwrap(),
+            OpenMode::ReadWrite,
+        )
+            .unwrap()
+    }
+
+    #[test]
+    fn simple_write_try_read() {
+        let data = (0u8..255u8).collect::<Vec<_>>();
+
+        Python::with_gil(|py| {
+            let memory = init("simple_write_try_read", DEFAULT_SIZE);
+            let none = memory.try_read();
+            assert!(none.is_none());
+
+            memory.write(&data, py).unwrap();
+            let version = memory.last_written_version();
+
+            let bytes = memory.try_read().unwrap();
+            assert_eq!(bytes.0.as_ref(), data);
+            assert_eq!(version, memory.last_read_version());
+
+            assert!(memory.try_read().is_none());
+        });
+    }
+
+    #[test]
+    fn simple_write_blocking_read() {
+        let data = (0u8..255u8).collect::<Vec<_>>();
+
+        Python::with_gil(|py| {
+            let memory = init("simple_write_blocking_read", DEFAULT_SIZE);
+            assert!(memory.try_read().is_none());
+
+            memory.write(&data, py).unwrap();
+            let version = memory.last_written_version();
+
+            let bytes = memory.blocking_read(py).unwrap();
+            assert_eq!(bytes.0.as_ref(), data);
+            assert_eq!(version, memory.last_read_version());
+
+            assert!(memory.try_read().is_none());
+        });
+    }
+
+    #[test]
+    fn simple_write_blocking_read_close() {
+        let data = (0u8..255u8).collect::<Vec<_>>();
+
+        Python::with_gil(|py| {
+            let memory = init("simple_write_blocking_read_close", DEFAULT_SIZE);
+            assert!(memory.try_read().is_none());
+
+            memory.write(&data, py).unwrap();
+            let version = memory.last_written_version();
+
+            let bytes = memory.blocking_read(py).unwrap();
+            assert_eq!(bytes.0.as_ref(), data);
+            assert_eq!(version, memory.last_read_version());
+
+            assert!(memory.try_read().is_none());
+
+            memory.close();
+            assert!(memory.blocking_read(py).is_none());
+            assert!(memory.try_read().is_none());
+        });
+    }
+    
+    #[test]
+    fn async_write() {
+        Python::with_gil(|py| {
+            let memory = init("async_write", DEFAULT_SIZE);
+
+            memory.write_async(PyBytes::new(py, &[1])).unwrap();
+            memory.write_async(PyBytes::new(py, &[2])).unwrap();
+            memory.write_async(PyBytes::new(py, &[3])).unwrap();
+            memory.write_async(PyBytes::new(py, &[4])).unwrap();
+            thread::sleep(Duration::from_millis(100));
+            assert!(memory.is_new_version_available());
+            assert_eq!(memory.blocking_read(py).unwrap(), RustBytes::new(&[4]));
+        });
     }
 }
