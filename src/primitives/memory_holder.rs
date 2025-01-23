@@ -1,20 +1,25 @@
-use std::ffi::CString;
-use std::os::fd::OwnedFd;
-use std::ptr::slice_from_raw_parts_mut;
-
 use rustix::fs::Mode;
 use rustix::mm::{MapFlags, ProtFlags};
 use rustix::shm::ShmOFlags;
+use std::ffi::{c_void, CString};
+use std::ops::Deref;
+use std::os::fd::OwnedFd;
+use std::ptr::slice_from_raw_parts_mut;
 
-pub struct SharedMemoryHolder {
+pub trait SlicePtrCast {
+    fn cast_from_slice_ptr(slice_ptr: *mut [u8]) -> *const Self;
+}
+
+pub struct SharedMemoryHolder<T: 'static + ?Sized> {
     name: CString,
     _fd: OwnedFd,
-    memory: *mut [u8],
+    mapped_struct: &'static T,
+    mapped_size: usize,
     created: bool,
 }
 
-impl SharedMemoryHolder {
-    pub fn create(name: CString, size: usize) -> std::io::Result<Self> {
+impl<T: ?Sized + SlicePtrCast> SharedMemoryHolder<T> {
+    pub unsafe fn create(name: CString, size: usize) -> std::io::Result<Self> {
         // Open shared memory
         let shm = rustix::shm::shm_open(
             name.as_c_str(),
@@ -28,19 +33,14 @@ impl SharedMemoryHolder {
             return Err(e.into());
         }
 
-        match Self::map_memory(&shm) {
-            Ok(slice_ptr) => {
-                unsafe {
-                    (*slice_ptr).fill(0);
-                }
-
-                Ok(Self {
-                    name,
-                    _fd: shm,
-                    memory: slice_ptr,
-                    created: true,
-                })
-            }
+        match unsafe { Self::map_memory(&shm, true) } {
+            Ok((mapped_struct, mapped_size)) => Ok(Self {
+                name,
+                _fd: shm,
+                mapped_struct,
+                mapped_size,
+                created: true,
+            }),
             Err(e) => {
                 let _ = rustix::shm::shm_unlink(name);
                 Err(e.into())
@@ -48,29 +48,27 @@ impl SharedMemoryHolder {
         }
     }
 
-    pub fn open(name: CString) -> std::io::Result<Self> {
+    pub unsafe fn open(name: CString) -> std::io::Result<Self> {
         // Open shared memory
         let shm = rustix::shm::shm_open(&name, ShmOFlags::RDWR, Mode::all())?;
+        let (mapped_struct, mapped_size) = unsafe { Self::map_memory(&shm, false)? };
 
         Ok(Self {
             name,
-            memory: Self::map_memory(&shm)?,
+            mapped_struct,
+            mapped_size,
             _fd: shm,
             created: false,
         })
     }
 
-    pub fn slice_ptr(&self) -> *mut [u8] {
-        self.memory
-    }
-
-    fn map_memory(shm: &OwnedFd) -> rustix::io::Result<*mut [u8]> {
+    unsafe fn map_memory(shm: &OwnedFd, create: bool) -> rustix::io::Result<(&'static T, usize)> {
         // Read actual size
         let stats = rustix::fs::fstat(shm)?;
         let size = stats.st_size as usize;
 
         // Map shared memory
-        let ptr = unsafe {
+        let void_ptr = unsafe {
             rustix::mm::mmap(
                 std::ptr::null_mut(),
                 size,
@@ -81,16 +79,34 @@ impl SharedMemoryHolder {
             )?
         };
 
-        Ok(slice_from_raw_parts_mut(ptr.cast(), size))
+        let slice_ptr: *mut [u8] = slice_from_raw_parts_mut(void_ptr.cast(), size);
+        if create {
+            unsafe {
+                (*slice_ptr).fill(0);
+            }
+        }
+        let ptr = T::cast_from_slice_ptr(slice_ptr);
+
+        Ok((unsafe { &*ptr }, size))
+    }
+
+    pub fn mapped_memory_size(&self) -> usize {
+        self.mapped_size
     }
 }
 
-unsafe impl Send for SharedMemoryHolder {}
-unsafe impl Sync for SharedMemoryHolder {}
+impl<T: ?Sized> Deref for SharedMemoryHolder<T> {
+    type Target = T;
 
-impl Drop for SharedMemoryHolder {
+    fn deref(&self) -> &Self::Target {
+        self.mapped_struct
+    }
+}
+
+impl<T: ?Sized> Drop for SharedMemoryHolder<T> {
     fn drop(&mut self) {
-        if let Err(e) = unsafe { rustix::mm::munmap(self.memory.cast(), self.memory.len()) } {
+        let ptr = self.mapped_struct as *const T as *mut c_void;
+        if let Err(e) = unsafe { rustix::mm::munmap(ptr, self.mapped_size) } {
             eprintln!("Failed to unmap shared memory: {}", e);
         }
 

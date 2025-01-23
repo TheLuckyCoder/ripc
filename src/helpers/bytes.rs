@@ -1,20 +1,20 @@
-use std::ffi::c_int;
-use pyo3::{pyclass, pymethods, Bound, PyErr, PyRef, PyResult, Python};
 use pyo3::types::PyBytes;
+use pyo3::{pyclass, pymethods, Bound, PyErr, PyRef, PyResult, Python};
+use std::ffi::c_int;
 
 #[pyclass]
 #[pyo3(frozen)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RustBytes(pub Box<[u8]>);
+pub struct RustPyBytes(pub(crate) Box<[u8]>);
 
-impl RustBytes {
+impl RustPyBytes {
     pub fn new(slice: &[u8]) -> Self {
         Self(Box::from(slice))
     }
 }
 
 #[pymethods]
-impl RustBytes {
+impl RustPyBytes {
     /// The number of bytes in this Bytes
     fn __len__(&self) -> usize {
         self.0.len()
@@ -47,4 +47,3 @@ impl RustBytes {
         PyBytes::new(py, &self.0)
     }
 }
-

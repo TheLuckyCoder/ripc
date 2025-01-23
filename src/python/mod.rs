@@ -1,5 +1,5 @@
 use crate::helpers::bytes::RustPyBytes;
-use crate::python::dynamic_queue::PythonSharedQueue;
+use crate::python::queue::PythonSharedQueue;
 use crate::python::message::PythonSharedMessage;
 use crate::python::open_mode::OpenMode;
 use pyo3::prelude::*;
@@ -7,7 +7,7 @@ use pyo3::types::PyFunction;
 use pyo3::{pymodule, Bound, PyResult};
 use rayon::prelude::*;
 
-mod dynamic_queue;
+mod queue;
 mod message;
 mod open_mode;
 
@@ -36,14 +36,14 @@ fn read_all(readers: Vec<Py<PythonSharedMessage>>, py: Python<'_>) -> Vec<Option
 #[pyfunction]
 fn read_all_map(
     readers: Vec<Py<PythonSharedMessage>>,
-    map: Py<PyFunction>,
+    map_operation: Py<PyFunction>,
     py: Python<'_>,
 ) -> Vec<Option<Py<PyAny>>> {
     py.allow_threads(|| {
         readers
             .into_par_iter()
             .map(|reader| reader.get().try_read())
-            .map(|bytes| bytes.map(|bytes| Python::with_gil(|py| map.call1(py, (bytes,)).unwrap())))
+            .map(|bytes| bytes.map(|bytes| Python::with_gil(|py| map_operation.call1(py, (bytes,)).unwrap())))
             .collect()
     })
 }

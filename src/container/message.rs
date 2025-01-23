@@ -1,9 +1,10 @@
 use crate::primitives::condvar::SharedCondvar;
+use crate::primitives::memory_holder::SlicePtrCast;
 use crate::primitives::mutex::SharedMutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[repr(C)]
-pub struct SharedMemory<T: ?Sized = SharedMemoryData> {
+pub struct SharedMessage<T: ?Sized = SharedMessageData> {
     pub readers_count: AtomicUsize,
     pub closed: AtomicBool,
     pub write_condvar: SharedCondvar,
@@ -15,12 +16,12 @@ pub struct SharedMemory<T: ?Sized = SharedMemoryData> {
 }
 
 #[repr(C)]
-pub struct SharedMemoryData {
+pub struct SharedMessageData {
     pub(crate) size: usize,
     pub(crate) bytes: [u8],
 }
 
-impl SharedMemoryData {
+impl SharedMessageData {
     pub(crate) fn copy(&mut self, data: &[u8]) {
         let data_len = data.len();
 
@@ -29,13 +30,13 @@ impl SharedMemoryData {
     }
 }
 
-impl SharedMemory {
+impl SharedMessage {
     pub(crate) const fn size_of_fields() -> usize {
         #[repr(C)]
         struct SharedMemoryDataSized {
             size: usize,
         }
-        size_of::<SharedMemory<SharedMemoryDataSized>>()
+        size_of::<SharedMessage<SharedMemoryDataSized>>()
     }
 
     pub(crate) fn write(&self, data: &[u8]) -> usize {
@@ -111,5 +112,11 @@ impl SharedMemory {
             self.reader_version_count.store(1, Ordering::Relaxed);
         }
         self.read_condvar.notify_one();
+    }
+}
+
+impl SlicePtrCast for SharedMessage {
+    fn cast_from_slice_ptr(slice_ptr: *mut [u8]) -> *const Self {
+        slice_ptr as *const Self
     }
 }

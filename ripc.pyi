@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Callable
 
 
 class OpenMode(Enum):
@@ -63,13 +64,13 @@ class SharedMessage(object):
 
     def last_written_version(self) -> int:
         """
-        :returns: the latest version that was written
+        :returns: the latest version that was written by this instance
         """
         pass
 
     def last_read_version(self) -> int:
         """
-        :returns: the latest version that was read
+        :returns: the latest version that was read by this instance
         """
         pass
 
@@ -100,12 +101,11 @@ class SharedMessage(object):
 
 class SharedQueue:
     @staticmethod
-    def create(name: str, max_element_size: int, mode: OpenMode = OpenMode.ReadWrite,
-               buffer_size=8) -> 'SharedQueue':
+    def create(name: str, max_element_size: int, mode: OpenMode) -> 'SharedQueue':
         pass
 
     @staticmethod
-    def open(name: str, mode: OpenMode = OpenMode.ReadWrite) -> 'SharedQueue':
+    def open(name: str, mode: OpenMode) -> 'SharedQueue':
         pass
 
     def write(self, data: bytes):
@@ -132,10 +132,15 @@ class SharedQueue:
         """
         pass
 
-    def is_empty(self) -> bool:
+    def last_written_version(self) -> int:
         """
-        Because of the multiprocessing nature of the queue, this method is not reliable
-        :returns: true if the queue is empty
+        :returns: the latest version that was written by this instance
+        """
+        pass
+
+    def last_read_version(self) -> int:
+        """
+        :returns: the latest version that was read by this instance
         """
         pass
 
@@ -163,7 +168,8 @@ class SharedQueue:
         """
         pass
 
-def read_all(readers: list[SharedMessage]) -> list[bytes]:
+
+def read_all(readers: list[SharedMessage]) -> list[bytes | None]:
     """
     Reads all the readers and returns a list of the messages
     Each message is read concurrently
@@ -172,12 +178,13 @@ def read_all(readers: list[SharedMessage]) -> list[bytes]:
     """
     return [reader.try_read() for reader in readers]
 
-def read_all_map(readers: list[SharedMessage], map) -> list:
+
+def read_all_map(readers: list[SharedMessage], map_operation: Callable[[bytes], object]) -> list[object | None]:
     """
     Reads all the readers and returns a list of the messages
-    Each message is read concurrently
+    Each message is read and mapped concurrently
     :param readers: list of readers
-    :param map: function to apply to the message
-    :return: list of messages
+    :param map_operation: function to apply to the message
+    :return: list of mapped messages
     """
-    return [map(reader.try_read()) for reader in readers]
+    return [map_operation(reader.try_read()) for reader in readers]
