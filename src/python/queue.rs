@@ -29,6 +29,34 @@ pub struct PythonSharedQueue {
     last_read_version: Arc<AtomicUsize>,
 }
 
+impl PythonSharedQueue {
+    fn new(
+        shared_memory: Arc<SharedMemoryHolder<SharedMessage>>,
+        name: String,
+        open_mode: OpenMode,
+    ) -> Self {
+        if open_mode.can_read() {
+            shared_memory.add_reader();
+        }
+
+        let last_read_version = Arc::new(AtomicUsize::default());
+
+        let receiver = open_mode
+            .can_read()
+            .then(|| Self::start_reader_thread(shared_memory.clone(), last_read_version.clone()));
+
+        Self {
+            shared_memory,
+            name,
+            sender: Mutex::default(),
+            receiver: Mutex::new(receiver),
+            open_mode,
+            last_written_version: Arc::default(),
+            last_read_version,
+        }
+    }
+}
+
 #[pymethods]
 impl PythonSharedQueue {
     #[staticmethod]
@@ -45,20 +73,7 @@ impl PythonSharedQueue {
             )?)
         };
 
-        let last_read_version = Arc::new(AtomicUsize::default());
-        let receiver = mode
-            .can_read()
-            .then(|| Self::start_reader_thread(shared_memory.clone(), last_read_version.clone()));
-
-        Ok(Self {
-            shared_memory,
-            name,
-            sender: Mutex::default(),
-            receiver: Mutex::new(receiver),
-            open_mode: mode,
-            last_written_version: Arc::default(),
-            last_read_version,
-        })
+        Ok(Self::new(shared_memory, name, mode))
     }
 
     #[staticmethod]
@@ -73,20 +88,7 @@ impl PythonSharedQueue {
             )?)?)
         };
 
-        let last_read_version = Arc::new(AtomicUsize::default());
-        let receiver = mode
-            .can_read()
-            .then(|| Self::start_reader_thread(shared_memory.clone(), last_read_version.clone()));
-
-        Ok(Self {
-            name,
-            shared_memory,
-            sender: Mutex::default(),
-            receiver: Mutex::new(receiver),
-            open_mode: mode,
-            last_written_version: Arc::default(),
-            last_read_version,
-        })
+        Ok(Self::new(shared_memory, name, mode))
     }
 
     fn write(&self, data: Bound<'_, PyBytes>) -> PyResult<()> {
@@ -99,23 +101,13 @@ impl PythonSharedQueue {
 
             let last_written_version = self.last_written_version.clone();
             let shared_memory = self.shared_memory.clone();
-            std::thread::spawn(move || {
-                loop {
-                    let Ok(data) = receiver.recv() else {
-                        break;
-                    };
-                    let lock = shared_memory.data.lock(); // TODO lock
-                    if shared_memory.version.load(Ordering::Relaxed)
-                        == shared_memory.reader_version.load(Ordering::Relaxed)
-                    {
-                        shared_memory.read_condvar.wait(lock);
-                    } else {
-                        drop(lock);
-                    }
-                    shared_memory.write(data.bytes());
+            std::thread::spawn(move || loop {
+                let Ok(data) = receiver.recv() else {
+                    break;
+                };
+                let new_version = shared_memory.write_waiting_for_readers(data.bytes(), None);
 
-                    last_written_version.fetch_add(1, Ordering::Relaxed);
-                }
+                last_written_version.store(new_version, Ordering::Relaxed);
             });
 
             sender
@@ -187,21 +179,110 @@ impl PythonSharedQueue {
         last_read_version: Arc<AtomicUsize>,
     ) -> Receiver<ReceiverQueueData> {
         let (sender, receiver) = channel();
-        let local_last_reader_version = last_read_version.load(Ordering::Relaxed);
+        let mut local_last_reader_version = last_read_version.load(Ordering::Relaxed);
 
         std::thread::spawn(move || {
             while !shared_memory.is_closed() {
+                let mut queue_data = None;
                 shared_memory.blocking_read(local_last_reader_version, |new_version, data| {
-                    let data = ReceiverQueueData {
+                    queue_data = Some(ReceiverQueueData {
                         version: new_version,
                         data: RustPyBytes::new(data),
-                    };
-
-                    let _ = sender.send(data);
+                    });
                 });
+
+                if let Some(queue_data) = queue_data {
+                    local_last_reader_version = queue_data.version;
+                    last_read_version.store(local_last_reader_version, Ordering::Relaxed);
+                    let _ = sender.send(queue_data);
+                }
             }
         });
 
         receiver
+    }
+}
+
+impl Drop for PythonSharedQueue {
+    fn drop(&mut self) {
+        if self.open_mode.can_read() {
+            self.shared_memory.remove_reader();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::num::NonZero;
+    use std::thread;
+    use std::time::Duration;
+
+    const DEFAULT_SIZE: u32 = 1024;
+
+    fn init(name: &str, size: u32) -> PythonSharedQueue {
+        PythonSharedQueue::create(
+            name.to_string(),
+            NonZero::new(size).unwrap(),
+            OpenMode::ReadWrite,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn simple_write_try_read() {
+        Python::with_gil(|py| {
+            let data = PyBytes::new(py, &(0u8..255u8).collect::<Vec<_>>());
+
+            let memory = init("queue_simple_write_try_read", DEFAULT_SIZE);
+            let none = memory.try_read();
+            assert!(none.is_none());
+
+            memory.write(data.clone()).unwrap();
+            thread::sleep(Duration::from_millis(200));
+            let version = memory.last_written_version();
+
+            let bytes = memory.try_read().unwrap();
+            assert_eq!(bytes.0.as_ref(), data);
+            assert_eq!(version, memory.last_read_version());
+
+            assert!(memory.try_read().is_none());
+            memory.close();
+        });
+    }
+
+    #[test]
+    fn simple_write_blocking_read() {
+        Python::with_gil(|py| {
+            let data = PyBytes::new(py, &(0u8..255u8).collect::<Vec<_>>());
+
+            let memory = init("queue_simple_write_blocking_read", DEFAULT_SIZE);
+
+            memory.write(data.clone()).unwrap();
+            thread::sleep(Duration::from_millis(200));
+            let version = memory.last_written_version();
+
+            let bytes = memory.blocking_read(py).unwrap();
+            assert_eq!(bytes.0.as_ref(), data);
+            assert_eq!(version, memory.last_read_version());
+
+            memory.close();
+        });
+    }
+
+    #[test]
+    fn multiple_writes() {
+        Python::with_gil(|py| {
+            let memory = init("queue_multiple_writes", DEFAULT_SIZE);
+
+            for i in 0..100 {
+                memory.write(PyBytes::new(py, &[i])).unwrap();
+            }
+
+            for i in 0..100 {
+                assert_eq!(memory.blocking_read(py).unwrap(), RustPyBytes::new(&[i]));
+            }
+            memory.close();
+        });
     }
 }

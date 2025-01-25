@@ -27,14 +27,23 @@ class SharedMessage(object):
         """
         pass
 
-    def write(self, data: bytes) -> None:
+    def write(self, data: bytes) -> int:
         """
         Writes the bytes into the shared memory, blocks until writing is complete
         This function also releases the GIL, while writing to the shared memory
+        :returns: the version of the message that was written
+        """
+        pass
+    
+    def write_waiting(self, data: bytes, wait_for_readers: int | None = None) -> int:
+        """
+        Writes the bytes into the shared memory, blocks until writing is complete
+        :param: wait_for_readers wait for the specified number of readers to read the message before writing, or wait for all if None
+        :returns: the version of the message that was written
         """
         pass
 
-    def write_async(self, data: bytes) -> None:
+    def write_async(self, data: bytes, wait_for_readers: int) -> None:
         """
         Sends the bytes to a background thread to write into the shared memory
         This method will never block the current thread
@@ -77,12 +86,6 @@ class SharedMessage(object):
     def name(self) -> str:
         """
         :returns: the name of this shared memory file
-        """
-        pass
-
-    def memory_size(self) -> int:
-        """
-        :returns: Amount of bytes allocated in this shared memory
         """
         pass
 

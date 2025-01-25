@@ -3,7 +3,6 @@ use std::cell::UnsafeCell;
 use std::ops::{Deref, DerefMut};
 
 #[derive(Default)]
-#[repr(C)]
 pub struct SharedMutex<T: ?Sized> {
     pub(crate) futex: SharedFutex,
     data: UnsafeCell<T>,

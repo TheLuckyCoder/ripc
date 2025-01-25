@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex};
 pub struct PythonSharedMessage {
     shared_memory: Arc<SharedMemoryHolder<SharedMessage>>,
     name: String,
-    memory_size: usize,
     open_mode: OpenMode,
     last_written_version: Arc<AtomicUsize>,
     last_read_version: AtomicUsize,
@@ -28,13 +27,15 @@ impl PythonSharedMessage {
     pub fn new(
         shared_memory: SharedMemoryHolder<SharedMessage>,
         name: String,
-        memory_size: usize,
         open_mode: OpenMode,
     ) -> Self {
+        if open_mode.can_read() {
+            shared_memory.add_reader();
+        }
+
         Self {
             shared_memory: Arc::new(shared_memory),
             name,
-            memory_size,
             open_mode,
             last_written_version: Arc::default(),
             last_read_version: AtomicUsize::default(),
@@ -61,13 +62,7 @@ impl PythonSharedMessage {
             )?
         };
 
-        let memory_size = shared_memory.data.lock().bytes.len();
-
-        if mode.can_read() {
-            shared_memory.readers_count.fetch_add(1, Ordering::Relaxed);
-        }
-
-        Ok(Self::new(shared_memory, name, memory_size, mode))
+        Ok(Self::new(shared_memory, name, mode))
     }
 
     #[staticmethod]
@@ -79,22 +74,16 @@ impl PythonSharedMessage {
         let shared_memory =
             unsafe { SharedMemoryHolder::<SharedMessage>::open(CString::new(name.clone())?)? };
 
-        let memory_size = shared_memory.data.lock().bytes.len();
-
-        if mode.can_read() {
-            shared_memory.readers_count.fetch_add(1, Ordering::Relaxed);
-        }
-
-        Ok(Self::new(shared_memory, name, memory_size, mode))
+        Ok(Self::new(shared_memory, name, mode))
     }
 
     fn write(&self, data: &[u8], py: Python<'_>) -> PyResult<()> {
         self.open_mode.check_write_permission();
 
-        if data.len() > self.memory_size {
+        if data.len() > self.payload_max_size() {
             return Err(PyValueError::new_err(format!(
                 "Message is too large to be sent! Max size: {}. Current message size: {}",
-                self.memory_size,
+                self.payload_max_size(),
                 data.len()
             )));
         }
@@ -107,14 +96,41 @@ impl PythonSharedMessage {
         Ok(())
     }
 
+    #[pyo3(signature = (data, wait_for_readers = None))]
+    fn write_waiting(
+        &self,
+        data: &[u8],
+        wait_for_readers: Option<NonZeroU32>,
+        py: Python<'_>,
+    ) -> PyResult<()> {
+        self.open_mode.check_write_permission();
+
+        if data.len() > self.payload_max_size() {
+            return Err(PyValueError::new_err(format!(
+                "Message is too large to be sent! Max size: {}. Current message size: {}",
+                self.payload_max_size(),
+                data.len()
+            )));
+        }
+
+        py.allow_threads(|| {
+            let version = self
+                .shared_memory
+                .write_waiting_for_readers(data, wait_for_readers);
+            self.last_written_version.store(version, Ordering::Relaxed);
+        });
+
+        Ok(())
+    }
+
     fn write_async(&self, data: Bound<'_, PyBytes>) -> PyResult<()> {
         self.open_mode.check_write_permission();
         let queue_data = SenderQueueData::new(data);
 
-        if queue_data.bytes().len() > self.memory_size {
+        if queue_data.bytes().len() > self.payload_max_size() {
             return Err(PyValueError::new_err(format!(
                 "Message is too large to be sent! Max size: {}. Current message size: {}",
-                self.memory_size,
+                self.payload_max_size(),
                 queue_data.bytes().len()
             )));
         }
@@ -131,7 +147,7 @@ impl PythonSharedMessage {
                 };
                 let data = receiver.try_iter().last().unwrap_or(data);
 
-                if shared_memory.closed.load(Ordering::Relaxed) {
+                if shared_memory.is_closed() {
                     break;
                 }
                 let new_version = shared_memory.write(data.bytes());
@@ -199,17 +215,25 @@ impl PythonSharedMessage {
         &self.name
     }
 
-    fn memory_size(&self) -> usize {
-        self.memory_size
+    fn payload_max_size(&self) -> usize {
+        self.shared_memory.mapped_memory_size() - SharedMessage::size_of_fields()
     }
 
     fn is_closed(&self) -> bool {
-        self.shared_memory.closed.load(Ordering::Relaxed)
+        self.shared_memory.is_closed()
     }
 
     fn close(&self) {
         self.open_mode.check_write_permission();
         self.shared_memory.close();
+    }
+}
+
+impl Drop for PythonSharedMessage {
+    fn drop(&mut self) {
+        if self.open_mode.can_read() {
+            self.shared_memory.remove_reader();
+        }
     }
 }
 
@@ -233,6 +257,7 @@ mod tests {
 
     #[test]
     fn simple_write_try_read() {
+        let _x = SharedMessage::size_of_fields();
         let data = (0u8..255u8).collect::<Vec<_>>();
 
         Python::with_gil(|py| {
@@ -248,6 +273,8 @@ mod tests {
             assert_eq!(version, memory.last_read_version());
 
             assert!(memory.try_read().is_none());
+            memory.close();
+            assert!(memory.is_closed());
         });
     }
 
@@ -267,6 +294,7 @@ mod tests {
             assert_eq!(version, memory.last_read_version());
 
             assert!(memory.try_read().is_none());
+            memory.close();
         });
     }
 
@@ -305,6 +333,7 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
             assert!(memory.is_new_version_available());
             assert_eq!(memory.blocking_read(py).unwrap(), RustPyBytes::new(&[4]));
+            memory.close();
         });
     }
 }

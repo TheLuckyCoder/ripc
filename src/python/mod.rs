@@ -1,15 +1,15 @@
 use crate::helpers::bytes::RustPyBytes;
-use crate::python::queue::PythonSharedQueue;
 use crate::python::message::PythonSharedMessage;
 use crate::python::open_mode::OpenMode;
+use crate::python::queue::PythonSharedQueue;
 use pyo3::prelude::*;
 use pyo3::types::PyFunction;
 use pyo3::{pymodule, Bound, PyResult};
 use rayon::prelude::*;
 
-mod queue;
 mod message;
 mod open_mode;
+mod queue;
 
 #[pymodule(gil_used = false)]
 fn ripc(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -43,7 +43,9 @@ fn read_all_map(
         readers
             .into_par_iter()
             .map(|reader| reader.get().try_read())
-            .map(|bytes| bytes.map(|bytes| Python::with_gil(|py| map_operation.call1(py, (bytes,)).unwrap())))
+            .map(|bytes| {
+                bytes.map(|bytes| Python::with_gil(|py| map_operation.call1(py, (bytes,)).unwrap()))
+            })
             .collect()
     })
 }
