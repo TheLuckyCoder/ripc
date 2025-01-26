@@ -1,18 +1,20 @@
 [package]
-name = "python_lib_ipc"
-version = "0.2.0"
+name = "rs_ipc"
+version = "0.1.0"
 edition = "2021"
 
 [profile.release]
 lto = "fat"
 
 [lib]
-name = "ripc"
+name = "rs_ipc"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.21" }
-libc = "0.2"
-rustix = { version = "0.38", default-features = false, features = ["mm", "fs", "shm", "std", "linux_latest"] }
-v4l = { version = "0.14.0", default-features = false, features = ["v4l2-sys"] }
-zune-jpeg = "0.4.11"
+pyo3 = { version = "0.23.4" }
+rustix = { version = "0.38", default-features = false, features = ["mm", "shm", "std", "linux_latest"] }
+linux-futex = "1.0.0"
+rayon = "1.10.0"
+
+[dev-dependencies]
+pyo3 = { version = "0.23.4", features = ["auto-initialize"] }
